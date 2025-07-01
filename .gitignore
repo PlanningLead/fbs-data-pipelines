@@ -192,3 +192,13 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+
+# Additional files to ignore
+# 1. Temporary files created by text editors or IDEs
+temp_data/
+
+# 2. Credentials
+mycreds.txt
+google_credentials.json
+token.pickle
