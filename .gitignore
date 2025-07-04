@@ -201,4 +201,4 @@ temp_data/
 # 2. Credentials
 mycreds.txt
 google_credentials.json
-token.pickle
+*.pickle

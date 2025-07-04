@@ -17,8 +17,8 @@ SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 
 def get_drive_service():
     creds = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
+    if os.path.exists('drive_token.pickle'):
+        with open('drive_token.pickle', 'rb') as token:
             creds = pickle.load(token)
             logger_msg = "Credenciales cargadas desde token.pickle"
             
@@ -28,11 +28,11 @@ def get_drive_service():
             logger_msg = "Credenciales refrescadas"
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
+                'google_credentials.json', SCOPES)
             creds = flow.run_local_server(port=0)
-        with open('token.pickle', 'wb') as token:
+        with open('drive_token.pickle', 'wb') as token:
             pickle.dump(creds, token)
-            logger_msg = "Nuevas credenciales guardadas en token.pickle"
+            logger_msg = "Nuevas credenciales para Google Drive guardadas en drive_token.pickle"
     logger.info(logger_msg)
     return build('drive', 'v3', credentials=creds)
 
@@ -95,7 +95,7 @@ def list_files_and_folders(service, location_id=None, is_shared_drive=False, pag
         try:
             results = service.files().list(
                 pageSize=page_size,
-                fields="nextPageToken, files(id, name, mimeType, parents)",
+                fields="nextPageToken, files(id, name, mimeType, parents, createdTime, modifiedTime)",
                 includeItemsFromAllDrives=is_shared_drive, # Incluir si es Unidad Compartida
                 supportsAllDrives=is_shared_drive,         # Necesario para el anterior
                 q=full_query,
