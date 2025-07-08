@@ -9,32 +9,95 @@ import os.path
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+import urllib.parse
 
 
 # Solo lectura de metadatos
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+INSTITUTIONAL_EMAIL = 'cgarcia@fbscgr.gov.co'
 
 
-def get_drive_service():
+def build_auth_url_for_specific_user(authorization_url):
+    """
+    Callback para añadir 'login_hint' a la URL de autorización.
+    """
+    # Parsear la URL para poder añadir o modificar parámetros
+    parsed_url = urllib.parse.urlparse(authorization_url)
+    query_params = urllib.parse.parse_qs(parsed_url.query)
+
+    # Añadir el login_hint
+    query_params['login_hint'] = [INSTITUTIONAL_EMAIL]
+    
+    # Reconstruir la URL
+    new_query = urllib.parse.urlencode(query_params, doseq=True)
+    new_url = parsed_url._replace(query=new_query).geturl()
+    
+    print(f"Abriendo URL de autenticación para {INSTITUTIONAL_EMAIL}:\n{new_url}")
+    return new_url
+
+
+def get_google_credentials_for_institutional_account(token_path: str = 'drive_token.pickle'):
     creds = None
-    if os.path.exists('drive_token.pickle'):
-        with open('drive_token.pickle', 'rb') as token:
+    # El archivo token.pickle almacena los tokens de acceso y refresco del usuario
+    if os.path.exists(token_path):
+        with open(token_path, 'rb') as token:
             creds = pickle.load(token)
-            logger_msg = "Credenciales cargadas desde token.pickle"
-            
+            logger_msg = f"Credenciales cargadas desde {token_path}"
+    
+    # Si no hay credenciales (válidas) o si las credenciales existentes no son del usuario deseado,
+    # permite al usuario iniciar sesión.
+    # También puedes forzar la re-autenticación eliminando token.pickle
+    # para asegurar que siempre se presente la pantalla de selección de cuenta.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            logger_msg = "Credenciales refrescadas"
+            logger_msg = f"Credenciales refrescadas para {token_path}"
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
                 'google_credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('drive_token.pickle', 'wb') as token:
+            
+            # --- ¡LA CLAVE ESTÁ AQUÍ! ---
+            # run_local_server acepta el callback para modificar la URL antes de abrirla.
+            creds = flow.run_local_server(
+                port=0,
+                authorization_url_callback=build_auth_url_for_specific_user,
+                prompt='select_account',  # Esto fuerza la pantalla de selección de cuenta
+            )
+        # Guarda las credenciales para la próxima ejecución
+        logger_msg = f"Nuevas credenciales para Google Drive guardadas en {token_path}"
+        with open(token_path, 'wb') as token:
             pickle.dump(creds, token)
-            logger_msg = "Nuevas credenciales para Google Drive guardadas en drive_token.pickle"
     logger.info(logger_msg)
-    return build('drive', 'v3', credentials=creds)
+    # Retorna las credenciales
+    return creds
+
+
+def get_drive_service(creds: object = None):
+    
+    if not creds:
+        if os.path.exists('drive_token.pickle'):
+            with open('drive_token.pickle', 'rb') as token:
+                creds = pickle.load(token)
+                logger_msg = "Credenciales cargadas desde token.pickle"
+                
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                logger_msg = "Credenciales refrescadas"
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    'google_credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open('drive_token.pickle', 'wb') as token:
+                pickle.dump(creds, token)
+                logger_msg = "Nuevas credenciales para Google Drive guardadas en drive_token.pickle"
+        logger.info(logger_msg)
+        return build('drive', 'v3', credentials=creds)
+    
+    else:
+        logger.debug("Usando credenciales proporcionadas directamente.")
+        return build('drive', 'v3', credentials=creds)
+    
 
 
 def list_all_shared_drives(service: object = None):
@@ -187,7 +250,9 @@ def download_file_into_dataframe(service, file_id, is_shared_drive=False):
 
             # Add progress bar using tqdm library if needed
             logger.debug(f"Descargando {file_id}... Progreso: {int(status.progress() * 100)}%")
-        logger.debug(f"\nDescarga de '{file_id}' completada. Tamaño en memoria: {download_buffer.tell()} bytes.")
+        
+        mb_value =  download_buffer.tell() / (1024 * 1024)
+        logger.debug(f"\nDescarga de '{file_id}' completada. Tamaño en memoria: {round(mb_value, 3)} megabytes (Mb).")
 
         raw_bytes_content = download_buffer.getvalue() 
 
@@ -204,7 +269,8 @@ def download_file_into_dataframe(service, file_id, is_shared_drive=False):
 
 if __name__ == '__main__':
     # Get the Google Drive service
-    service = get_drive_service()
+    creds = get_google_credentials_for_institutional_account()
+    service = get_drive_service(creds=creds)
 
     target_folders = ['credito', 'radicados', 'funcionariosCGR']
     files = read_metadata(

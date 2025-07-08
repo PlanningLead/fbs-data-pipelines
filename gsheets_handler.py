@@ -1,33 +1,79 @@
-import polars as pl
 import pickle
 import os.path
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+from loguru import logger
+import urllib.parse
 
 # Asegúrate de incluir el scope para Google Sheets
 SCOPES = [
     'https://www.googleapis.com/auth/drive.readonly',  # Para la parte de lectura de Drive si la necesitas
     'https://www.googleapis.com/auth/spreadsheets'     # NUEVO: Para escribir en Sheets
 ]
+INSTITUTIONAL_EMAIL = 'cgarcia@fbscgr.gov.co'
 
-def get_sheets_service():
-    """Autentica y devuelve el objeto de servicio de Google Sheets."""
+def build_auth_url_for_specific_user(authorization_url):
+    """
+    Callback para añadir 'login_hint' a la URL de autorización.
+    """
+    # Parsear la URL para poder añadir o modificar parámetros
+    parsed_url = urllib.parse.urlparse(authorization_url)
+    query_params = urllib.parse.parse_qs(parsed_url.query)
+
+    # Añadir el login_hint
+    query_params['login_hint'] = [INSTITUTIONAL_EMAIL]
+    
+    # Reconstruir la URL
+    new_query = urllib.parse.urlencode(query_params, doseq=True)
+    new_url = parsed_url._replace(query=new_query).geturl()
+    
+    print(f"Abriendo URL de autenticación para {INSTITUTIONAL_EMAIL}:\n{new_url}")
+    return new_url
+
+
+def get_google_credentials_for_institutional_account(token_path: str = 'drive_token.pickle'):
     creds = None
-    if os.path.exists('sheets_token.pickle'):
-        with open('sheets_token.pickle', 'rb') as token:
+    # El archivo token.pickle almacena los tokens de acceso y refresco del usuario
+    if os.path.exists(token_path):
+        with open(token_path, 'rb') as token:
             creds = pickle.load(token)
+            logger_msg = f"Credenciales cargadas desde {token_path}"
+    
+    # Si no hay credenciales (válidas) o si las credenciales existentes no son del usuario deseado,
+    # permite al usuario iniciar sesión.
+    # También puedes forzar la re-autenticación eliminando token.pickle
+    # para asegurar que siempre se presente la pantalla de selección de cuenta.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
+            logger_msg = f"Credenciales refrescadas para {token_path}"
         else:
             flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('sheets_token.pickle', 'wb') as token:
+                'google_credentials.json', SCOPES)
+            
+            # --- ¡LA CLAVE ESTÁ AQUÍ! ---
+            # run_local_server acepta el callback para modificar la URL antes de abrirla.
+            creds = flow.run_local_server(
+                port=0,
+                authorization_url_callback=build_auth_url_for_specific_user,
+                prompt='select_account',  # Esto fuerza la pantalla de selección de cuenta
+            )
+        # Guarda las credenciales para la próxima ejecución
+        logger_msg = f"Nuevas credenciales para Google Drive guardadas en {token_path}"
+        with open(token_path, 'wb') as token:
             pickle.dump(creds, token)
-    # Construir el servicio de Sheets (versión v4)
-    return build('sheets', 'v4', credentials=creds)
+    logger.info(logger_msg)
+    # Retorna las credenciales
+    return creds
+
+
+def get_sheets_service(creds=None):
+    """Autentica y devuelve el objeto de servicio de Google Sheets."""
+    if creds is None:
+        logger.error("Credenciales no proporcionadas. Llama a get_google_credentials_for_institutional_account primero.")
+    else:
+        return build('sheets', 'v4', credentials=creds)
 
 
 def write_dataframe_to_sheet(dataframe, spreadsheet_id, sheet_name='Sheet1', start_cell='A1', clear_existing=True):
