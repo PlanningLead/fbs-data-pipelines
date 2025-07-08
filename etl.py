@@ -18,15 +18,17 @@ class dataPipeline:
     creds = get_google_credentials_for_institutional_account()
     drive_service = get_drive_service(creds=creds)
    
+    validation = {'file_a': None, 'file_b': None}
 
     @classmethod
     def extract_data_from_drive(self, target: list, data_layer: str) -> dict:
-
         layers = {'raw': 'crudos', 'modeled': 'modelados'}
+        self.current_layer = layers[data_layer]
+
         return read_metadata(
             service=self.drive_service,
             target_drive_name='Planeacion',  
-            target_parents=['3 Datos', layers[data_layer], None],
+            target_parents=['3 Datos', self.current_layer, None],
             target_folders=target
         )
 
@@ -43,43 +45,34 @@ class dataPipeline:
     def transform_(self, target: list, files: dict) -> None:
         # Sort list of dictionaries by createdTime in descending order
         files = sorted(files['radicados']['files'], key=lambda x: x['createdTime'], reverse=True)
-        a_file = files[0] if files else None
+        selected_file = files[0] if files else None
 
-        if a_file:
-            logger.info(f"Found raw file: {a_file['name']} with ID: {a_file['id']}")
-            df = download_file_into_dataframe(service=pipeline.drive_service, file_id=a_file['id'], is_shared_drive=True)
+        if selected_file:
+            logger.debug(f"Found raw file: {selected_file['name']} with ID: {selected_file['id']}")
+            df = download_file_into_dataframe(service=pipeline.drive_service, file_id=selected_file['id'], is_shared_drive=True)
             self.output_dict['raw'] = df
 
             # Transform the data
             transformed_df = self.preprocessing_(input_df=df, subject=target[0])
+            
             self.output_dict['modeled'] = transformed_df
-        logger.debug("Data extracted and transformed successfully.")
-    
-    # Create a table recording the differences
 
-    # Add onto modeled file the current dataframe
-    # for folder, file_dict in files.items():
+            if self.current_layer == 'modeled':
+                self.validation['file_b'] = df
+            if self.current_layer == 'raw':
+                self.validation['file_a'] = transformed_df
 
-    #     logger.debug(f"De la carpeta: {folder} se encontraron: {len(file_dict['files'])} archivos.")
-    #     # Take the file with the most recent date
-    #     file_to_download = file_dict['files'][0]
-
-    #     # Download the file into a DataFrame
-    #     df = download_file_into_dataframe(service, file_to_download['id'], is_shared_drive=True)
-        
-    #     # Extract modeled data from the other folders
-
-    #     # Add both dataframes into a dictionary
-
-
-    #     logger.debug(f"Archivo {file_to_download['name']} descargado a dataframe: Shape=({df.shape})")
-    # logger.info("Retrieving Google Drive service...")
-    # return output_dict
+        logger.debug("Data extracted/transformed successfully.")
+        return transformed_df
 
     @classmethod
     def check_for_changes_in_data(self):
-        return None
+        df_a = self.validation['file_a']
+        df_b = self.validation['file_b']
 
+        # use polars to merge dataframes
+        
+        return None
 
     @staticmethod
     def preprocessing_(input_df: pl.DataFrame, subject: str) -> pl.DataFrame:
@@ -102,10 +95,14 @@ if __name__ == "__main__":
     logger.info("Starting ETL process...")
     # target_folders = ['credito', 'radicados', 'funcionariosCGR']
     target = ['radicados']
-    
     pipeline = dataPipeline()
     
-    # Extract data from Google Drive    raw_files = pipeline.extract_data_from_drive(target=target, data_layer='raw')
+    logger.info(f"ETL process for raw files in folder '{target[0]}'")
+    # Extract raw data from Google Drive
     raw_files = pipeline.extract_data_from_drive(target=target, data_layer='raw')
     # Sort list of dictionaries by createdTime in descending order
-    pipeline.transform_(target=target, )
+    transformed_file = pipeline.transform_(target=target, files=raw_files)
+    
+    # Data changes validations
+
+    # Load into modeled files
