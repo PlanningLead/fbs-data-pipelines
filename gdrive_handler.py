@@ -67,7 +67,7 @@ def get_google_credentials_for_institutional_account(token_path: str = 'drive_to
         logger_msg = f"Nuevas credenciales para Google Drive guardadas en {token_path}"
         with open(token_path, 'wb') as token:
             pickle.dump(creds, token)
-    logger.info(logger_msg)
+    logger.debug(logger_msg)
     # Retorna las credenciales
     return creds
 
@@ -78,7 +78,7 @@ def get_drive_service(creds: object = None):
         if os.path.exists('drive_token.pickle'):
             with open('drive_token.pickle', 'rb') as token:
                 creds = pickle.load(token)
-                logger_msg = "Credenciales cargadas desde token.pickle"
+                logger_msg = "Credenciales cargadas desde drive_token.pickle"
                 
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
@@ -91,7 +91,7 @@ def get_drive_service(creds: object = None):
             with open('drive_token.pickle', 'wb') as token:
                 pickle.dump(creds, token)
                 logger_msg = "Nuevas credenciales para Google Drive guardadas en drive_token.pickle"
-        logger.info(logger_msg)
+        logger.debug(logger_msg)
         return build('drive', 'v3', credentials=creds)
     
     else:
@@ -132,7 +132,7 @@ def list_all_shared_drives(service: object = None):
     return all_shared_drives
 
 
-def list_files_and_folders(service, location_id=None, is_shared_drive=False, page_size=100, file_type=None, search_name=None):
+def list_files_and_folders(service, location_id=None, is_shared_drive=False, page_size=100, file_type=None, search_name=None) -> list:
     page_token = None
     all_files = []
     
@@ -169,8 +169,8 @@ def list_files_and_folders(service, location_id=None, is_shared_drive=False, pag
             all_files.extend(items)
             
             # Imprimir progreso si hay muchos archivos
-            if len(all_files) % 1000 == 0 and len(all_files) > 0:
-                print(f"  Archivos encontrados hasta ahora en esta ubicación: {len(all_files)}")
+            # if len(all_files) % 1000 == 0 and len(all_files) > 0:
+            #     print(f"  Archivos encontrados hasta ahora en esta ubicación: {len(all_files)}")
 
             page_token = results.get('nextPageToken', None)
             if not page_token:
@@ -186,7 +186,7 @@ def list_files_and_folders(service, location_id=None, is_shared_drive=False, pag
     return all_files
 
 
-def read_metadata(service, target_drive_name: str=None, target_parents: list=[], target_folders: list=[]) -> list:
+def read_metadata(service, target_drive_name: str=None, target_parents: list=[], target_folders: list=[], data_layer: str=None) -> list:
     # Get the ids and names of all shared drives
     shared_drives = list_all_shared_drives(service=service)
 
@@ -196,7 +196,7 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
     for drive in shared_drives:
         if drive['name'] == target_drive_name:
             target_drive_id = drive['id']
-            logger.info(f"Shared Drive '{target_drive_name}' found with ID: {target_drive_id}")
+            logger.debug(f"Shared Drive '{target_drive_name}' found with ID: {target_drive_id}")
             break
 
     # Get all files and folders in the shared drive
@@ -218,15 +218,18 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
     for f in target_folders:
         # Search for a column value in a list of dictionaries
         folder_match = next((d for d in files_and_folders if d.get("name") == f), None)
-        target_files = list_files_and_folders(
-            service,
-            location_id=folder_match['id'], 
-            is_shared_drive=True,
-            search_name=None
-        )
-        # Append to dictionary for each folder
-        files_dict[f] = {'location_id': folder_match['id'], 'files': target_files} 
-    logger.info("Data files and folders found successfully.")
+        if data_layer == 'raw':
+            target_files = list_files_and_folders(
+                service,
+                location_id=folder_match['id'], 
+                is_shared_drive=True,
+                search_name=None
+            )
+            # Append to dictionary for each folder
+            files_dict[f] = {'location_id': folder_match['id'], 'files': target_files}
+        elif data_layer == 'modeled':
+            files_dict[f] = {'location_id': folder_match['id'], 'files': [folder_match]}
+    logger.debug(f"Data files and folders in {data_layer} layer found successfully.")
     return files_dict
 
 
@@ -247,12 +250,10 @@ def download_file_into_dataframe(service, file_id, is_shared_drive=False):
 
         while not done:
             status, done = downloader.next_chunk()
-
-            # Add progress bar using tqdm library if needed
-            logger.debug(f"Descargando {file_id}... Progreso: {int(status.progress() * 100)}%")
         
         mb_value =  download_buffer.tell() / (1024 * 1024)
-        logger.debug(f"\nDescarga de '{file_id}' completada. Tamaño en memoria: {round(mb_value, 3)} megabytes (Mb).")
+        logger.warning(f"File '{file_id}' download progress: {int(status.progress() * 100)}%")
+        logger.warning(f"File Memory size: {round(mb_value, 3)} megabytes (Mb).")
 
         raw_bytes_content = download_buffer.getvalue() 
 
