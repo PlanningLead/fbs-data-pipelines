@@ -36,7 +36,7 @@ def build_auth_url_for_specific_user(authorization_url):
     return new_url
 
 
-def get_google_credentials_for_institutional_account(token_path: str = 'drive_token.pickle'):
+def get_gdrive_credentials_for_institutional_account(token_path: str = 'drive_token.pickle'):
     creds = None
     # El archivo token.pickle almacena los tokens de acceso y refresco del usuario
     if os.path.exists(token_path):
@@ -233,7 +233,7 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
     return files_dict
 
 
-def download_file_into_dataframe(service, file_id, is_shared_drive=False):
+def download_csv_into_dataframe(service, file_id, is_shared_drive=False):
     try:
         # Request para descargar el archivo.
         # supportsAllDrives es crucial si el archivo está en una Unidad Compartida.
@@ -265,12 +265,12 @@ def download_file_into_dataframe(service, file_id, is_shared_drive=False):
 
     except Exception as e:
         logger.error(f"Error al descargar el archivo '{file_id}': {e}")
-        return False
+        return None
 
 
 if __name__ == '__main__':
     # Get the Google Drive service
-    creds = get_google_credentials_for_institutional_account()
+    creds = get_gdrive_credentials_for_institutional_account()
     service = get_drive_service(creds=creds)
 
     target_folders = ['credito', 'radicados', 'funcionariosCGR']
@@ -291,6 +291,6 @@ if __name__ == '__main__':
         local_download_path = os.path.join(os.getcwd(), 'temp_data', f"{download_file_name}.parquet") # Guarda en el mismo directorio del script
 
         # 3. Descarga el archivo
-        df = download_file_into_dataframe(service, file_to_download['id'], local_download_path, is_shared_drive=True)
+        df = download_csv_into_dataframe(service, file_to_download['id'], local_download_path, is_shared_drive=True)
         
         logger.debug(f"Archivo {file_to_download['name']} descargado a dataframe: Shape=({df.shape})")

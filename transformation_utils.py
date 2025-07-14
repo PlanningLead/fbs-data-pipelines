@@ -2,6 +2,7 @@ import polars as pl
 from datetime import date
 from loguru import logger
 import os
+import random
 
 
 class FBSPreprocessing:
@@ -10,6 +11,7 @@ class FBSPreprocessing:
     output_folder = "C:/Users/cgarcia/Documents/datos/modelados"
 
     working_group_dict = {
+        'TL': 'Tramite en línea',
         'DDB': 'Direccion de desarrollo bienestar', 'GCIG': 'Grupo de control interno de gestión', 
         'GGAFCC': 'Grupo de gestion admin Crédito y cartera', 'SDE': 'Subdirección de desarrollo y emprendimiento',
         'GGC': 'Grupo de gestion de cesantias', 'GGEC': 'Grupo de gestion educativa y colegio',
@@ -118,20 +120,52 @@ class FBSPreprocessing:
         
         # Separate values in column "Destino". IN the split, the first value is the destination and the second value is the type of destination
         output_df = output_df.with_columns(
-            pl.col('Destino')
-            .str.split_exact("-", 2)
-            .struct.rename_fields(["cargo_destino", "cod_grupo_destino", "funcionario_destino"])
-            .alias('array_destino')
+            pl.when(pl.col('Destino').str.contains("-"))
+              .then(pl.col('Destino')
+                .str.split_exact("-", 2)
+                .struct.rename_fields(["cargo_destino", "cod_grupo_destino", "funcionario_destino"])
+                .alias('array_destino')
+            )
+            .otherwise(
+            # Si NO contiene guion (es un nombre completo)
+            pl.struct([
+                pl.lit(None, dtype=pl.String).alias("cargo_destino"), # Cargo: Nulo
+                pl.lit("TL", dtype=pl.String).alias("cod_grupo_destino"), # Grupo: Nulo
+                pl.lit("GRUPO ATENCIÓN AL USUARIO", dtype=pl.String).alias("funcionario_destino"), # Funcionario: El valor completo
+            ])
+            )
         ).unnest('array_destino')
 
         # Map a dictionary to the column "cod_grupo_destino" to create a new column "grupo_destino".
         output_df = output_df.with_columns(
-            pl.col("cod_grupo_destino")
-            .replace_strict(self.working_group_dict, default=None)
-            .alias("grupo_destino")
-        )
-
+                pl.col("cod_grupo_destino")
+                .replace_strict(self.working_group_dict, default=None)
+                .alias("grupo_destino")
+            )
         return output_df
+
+
+def column_row_match_analyzer(sample_size: int, headers: list, data: list):
+
+    random_rows = random.choices(k=sample_size, population=range(len(data)))
+    output = []
+    for r in random_rows:
+        output.append(len(data[r]) == len(headers))
+    
+    null_value_rate = 1 - (sum(output) / sample_size)
+    return float(round(null_value_rate, 3))
+
+
+def column_row_shape_match(headers: list, data: list):
+    num_columns = len(headers)
+    processed_data = []
+    for row in data:
+        # Asegura que cada fila tenga la misma cantidad de columnas que los encabezados
+        # Si la fila es más corta, rellena con None para las columnas faltantes
+        if len(row) < num_columns:
+            row.extend([None] * (num_columns - len(row)))
+        processed_data.append(row)
+    return processed_data
 
 
 if __name__ == '__main__':

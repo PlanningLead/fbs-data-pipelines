@@ -1,24 +1,32 @@
 from loguru import logger
-from transform_data import FBSPreprocessing
+from transformation_utils import FBSPreprocessing
 from datetime import datetime
 import polars as pl
 
 from gdrive_handler import (get_drive_service, 
                             read_metadata, 
-                            download_file_into_dataframe, 
-                            get_google_credentials_for_institutional_account)
+                            download_csv_into_dataframe, 
+                            get_gdrive_credentials_for_institutional_account)
 
-from gsheets_handler import *
+from gsheets_handler import (get_gsheets_credentials_for_institutional_account,
+                             get_sheets_service,
+                             download_data_from_sheets)
 
 
 
 class dataPipeline:
 
-    output_dict = {'raw': None, 'modeled': None}
-    creds = get_google_credentials_for_institutional_account()
-    drive_service = get_drive_service(creds=creds)
-   
     validation = {'file_a': None, 'file_b': None}
+
+    @classmethod
+    def start_drive_service(self) -> None:
+        creds = get_gdrive_credentials_for_institutional_account()
+        self.drive_service = get_drive_service(creds=creds)
+        
+    @classmethod
+    def start_sheets_service(self) -> None:
+        creds = get_gsheets_credentials_for_institutional_account()
+        self.sheets_service = get_sheets_service(creds=creds)
 
     @classmethod
     def extract_metadata_from_drive(self, target: list, data_layer: str) -> dict:
@@ -47,35 +55,45 @@ class dataPipeline:
         selected_file = files[0] if files else None
         return selected_file
 
-    # Transform data
+    # Extract data
     @classmethod
-    def transform_(self, target: list, files: dict) -> None:
-        # Sort list of dictionaries by createdTime in descending order
-        
-        if self.validation['file_a'] is None:
+    def extract_(self, files: dict=None) -> tuple:
+        df = pl.DataFrame()
+        if self.current_layer == 'raw':
             selected_file = self.sort_and_get_most_recent(files)
             logger.debug(f"Found raw file: {selected_file['name']} with ID: {selected_file['id']}")
-            df = download_file_into_dataframe(
+            df = download_csv_into_dataframe(
                 service=self.drive_service, 
                 file_id=selected_file['id'], 
                 is_shared_drive=True
             )
-            # Transform the data
-            output_df = self.preprocessing_(input_df=df, subject=target[0])
-        
-            self.validation['file_a'] = output_df
+        elif self.current_layer == 'modeled':
+            selected_file = files['files'][0]
+            df = download_data_from_sheets(
+                service=self.sheets_service, 
+                spreadsheet_id=selected_file['id'],
+                range_name='modeled_radicados.csv'
+            )
 
+        return (df, selected_file)
+
+    # Transform data
+    @classmethod
+    def transform_(self, dataframe: object, selected_file: dict) -> None:
+        # Transform the data
+        if self.current_layer == 'raw':
+            clean_name = selected_file['name']
+            if len(selected_file['name'].split("_")) > 1:
+                clean_name = selected_file['name'].split("_")[1].split(".")[0]
+
+            output_df = self.preprocessing_(input_df=dataframe, subject=clean_name)
+            self.validation['file_a'] = output_df
             logger.debug("Raw data extracted & transformed successfully.")
         
-        else:
-            output_df = download_file_into_dataframe(
-                service=self.drive_service, 
-                file_id=files['location_id'], 
-                is_shared_drive=True
-            )
-            self.validation['file_b'] = output_df
+        elif self.current_layer == 'modeled':
+            self.validation['file_b'] = dataframe
+            output_df = dataframe
 
-            logger.debug("Modeled data extracted successfully.")
         return output_df
 
     @classmethod
@@ -114,14 +132,25 @@ if __name__ == "__main__":
     pipeline = dataPipeline()
 
     # Extract data from Google Drive
-    logger.info(f"ETL process for raw files in folder '{['radicados'][0]}'")
-    raw_files = pipeline.extract_metadata_from_drive(target=['radicados'], data_layer='raw')
-    transformed_file = pipeline.transform_(target=['radicados'], files=raw_files)
-    
-    logger.info(f"ETL process for modeled files in file '{['radicados'][0]}'")
-    modeled_files = pipeline.extract_metadata_from_drive(target=['radicados'], data_layer='modeled')
-    extracted_file = pipeline.transform_(target=['radicados'], files=raw_files)
+    group = ['radicados']
 
+    # Extract data for raw files
+    pipeline.start_drive_service()
+    logger.info(f"ETL process for raw files in folder '{group[0]}'")
+    raw_metadata = pipeline.extract_metadata_from_drive(target=group, data_layer='raw')
+    df, extracted_file = pipeline.extract_(files=raw_metadata)
+    transformed_file = pipeline.transform_(df, selected_file=extracted_file)
 
-    # Load into modeled files
+    # Extract data for modeled files
+    pipeline.start_sheets_service()
+    logger.info(f"ETL process for modeled files in file '{group[0]}'")
+    modeled_metadata = pipeline.extract_metadata_from_drive(target=group, data_layer='modeled')
+    df, extracted_file = pipeline.extract_(files=modeled_metadata[group[0]])
+    extracted_file = pipeline.transform_(dataframe=df, selected_file=extracted_file)
+
+    # TODO: Compare both files, raw transformed and modeled. 
+
+    # TODO: Generate a log for changes between raw transformed and modeled files
+
+    # TODO: Load resulting dataframe into modeled sheets. Save modeled metadata ID.
     logger.info("Finishing ETL Process...")

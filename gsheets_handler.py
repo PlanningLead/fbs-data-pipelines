@@ -1,10 +1,13 @@
 import pickle
+import polars as pl
 import os.path
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from loguru import logger
 import urllib.parse
+from transformation_utils import column_row_match_analyzer, column_row_shape_match 
+
 
 # Asegúrate de incluir el scope para Google Sheets
 SCOPES = [
@@ -32,7 +35,7 @@ def build_auth_url_for_specific_user(authorization_url):
     return new_url
 
 
-def get_google_credentials_for_institutional_account(token_path: str = 'drive_token.pickle'):
+def get_gsheets_credentials_for_institutional_account(token_path: str = 'sheets_token.pickle'):
     creds = None
     # El archivo token.pickle almacena los tokens de acceso y refresco del usuario
     if os.path.exists(token_path):
@@ -75,6 +78,54 @@ def get_sheets_service(creds=None):
     else:
         return build('sheets', 'v4', credentials=creds)
 
+
+def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: str):
+    """
+    Lee datos de un rango específico de una Google Sheet y los devuelve como un DataFrame de pandas.
+
+    Args:
+        spreadsheet_id (str): El ID de la hoja de cálculo de Google.
+        range_name (str): El rango de celdas a leer (ej., 'Sheet1!A1:C10', 'Datos!A:A').
+    Returns:
+        pd.DataFrame: Un DataFrame de pandas con los datos, o None si hay un error o no hay datos.
+    """
+
+    try:
+        # Llama a la API para obtener los valores del rango especificado
+        result = service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            # valueRenderOption='FORMULA',
+            valueRenderOption='FORMATTED_VALUE', # Lee los valores tal como los ves en la hoja
+            # dateTimeRenderOption='FORMATTED_STRING' # Las fechas/horas se devuelven como strings
+        ).execute()
+
+        values = result.get('values', [])
+
+        if not values:
+            logger.warning(f"No se encontraron datos en el rango '{range_name}' de la hoja '{spreadsheet_id}'.")
+            return pl.DataFrame() # Devuelve un DataFrame vacío
+        
+        # La primera fila serán los encabezados (asumiendo que tu hoja tiene encabezados)
+        headers = values[0]
+        # El resto serán los datos
+        data = values[1:]
+
+        # --- APLICAR RELLENO DE CELDAS VACÍAS AQUÍ ---
+        shape_match_rate = column_row_match_analyzer(sample_size=20, headers=headers, data=data)
+
+        if shape_match_rate < 1:
+            data = column_row_shape_match(headers=headers, data=data)
+        
+        # Crea el DataFrame de pandas
+        df = pl.DataFrame(data, schema=headers, nan_to_null=True, orient='row')
+        logger.debug(f"Datos leídos con éxito. Dimensiones del DataFrame: {df.shape}")
+        return df
+
+    except Exception as e:
+        logger.error(f"Error al leer datos de la hoja de cálculo '{spreadsheet_id}' en el rango '{range_name}': {e}")
+        return None
+    
 
 def write_dataframe_to_sheet(dataframe, spreadsheet_id, sheet_name='Sheet1', start_cell='A1', clear_existing=True):
     """
