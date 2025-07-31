@@ -10,6 +10,7 @@ class FBSPreprocessing:
     output_folder = "C:/Users/cgarcia/Documents/datos/modelados"
 
     working_group_dict = {
+        'TL': 'Tramite en línea',
         'DDB': 'Direccion de desarrollo bienestar', 'GCIG': 'Grupo de control interno de gestión', 
         'GGAFCC': 'Grupo de gestion admin Crédito y cartera', 'SDE': 'Subdirección de desarrollo y emprendimiento',
         'GGC': 'Grupo de gestion de cesantias', 'GGEC': 'Grupo de gestion educativa y colegio',
@@ -89,7 +90,7 @@ class FBSPreprocessing:
     @classmethod
     def save_results_into_local(self, file_name: str, df: pl.DataFrame) -> None:
         # Check if csv file already exists
-        output_file_name = f"{self.output_folder}/modeled_{file_name.split("_")[1]}"
+        output_file_name = f"{self.output_folder}/modeled_{file_name.split('_')[1]}"
 
         if not output_file_name.endswith('.csv'):
             output_file_name += '.csv'
@@ -111,29 +112,40 @@ class FBSPreprocessing:
 
     @classmethod
     def radicacion_preprocessing(self, df: pl.DataFrame) -> None:
-        df = df.with_columns(
-            pl.col('Fecha Radicacion').str.to_date().alias('fecha_radicacion')
+        
+        output_df = df.with_columns(
+            pl.col('Fecha Radicacion').str.strptime(pl.Datetime, format="%d/%m/%Y %H:%M", strict=False).alias('Fecha Radicacion')
         )
-        # drop modified columns
-        df = df.drop(['Fecha Radicacion'])
-        df = df.rename({'fecha_radicacion': 'fecha_solicitud'})
         
         # Separate values in column "Destino". IN the split, the first value is the destination and the second value is the type of destination
-        df = df.with_columns(
-            pl.col('Destino')
-            .str.split_exact("-", 2)
-            .struct.rename_fields(["cargo_destino", "cod_grupo_destino", "funcionario_destino"])
-            .alias('array_destino')
+        output_df = output_df.with_columns(
+            pl.when(pl.col('Destino').str.contains("-"))
+              .then(pl.col('Destino')
+                .str.split_exact("-", 2)
+                .struct.rename_fields(["cargo_destino", "cod_grupo_destino", "funcionario_destino"])
+                .alias('array_destino')
+            )
+            .otherwise(
+            # Si NO contiene guion (es un nombre completo)
+            pl.struct([
+                pl.lit(None, dtype=pl.String).alias("cargo_destino"),
+                pl.lit("GAUEGI", dtype=pl.String).alias("cod_grupo_destino"),
+                pl.lit(None, dtype=pl.String).alias("funcionario_destino"),
+            ])
+            )
         ).unnest('array_destino')
 
         # Map a dictionary to the column "cod_grupo_destino" to create a new column "grupo_destino".
-        df = df.with_columns(
-            pl.col("cod_grupo_destino")
-            .replace_strict(self.working_group_dict, default=None)
-            .alias("grupo_destino")
-        )
+        output_df = output_df.with_columns(
+                pl.col("cod_grupo_destino")
+                .replace_strict(self.working_group_dict, default=None)
+                .alias("grupo_destino")
+            )
 
-        return df
+        # TODO: Add a field that Finds the service level. End date - Start date < 30 days
+        # TODO: Start running nlp analysis
+        # TODO: Add nature tree into the data
+        return output_df
 
 
 if __name__ == '__main__':

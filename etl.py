@@ -1,69 +1,165 @@
 from loguru import logger
-from gdrive_handler import get_drive_service, read_metadata, download_file_into_dataframe
-import os, io
-from data_cleaning import FBSPreprocessing
-from datetime import date
+from src.transformation_ import FBSPreprocessing
+from datetime import datetime
 import polars as pl
+from src.gdrive_handler import (
+    get_drive_service, 
+    read_metadata, 
+    download_csv_into_dataframe, 
+    get_gdrive_credentials_for_institutional_account
+)
+from src.gsheets_handler import (
+    get_gsheets_credentials_for_institutional_account,
+    get_sheets_service,
+    download_data_from_sheets,
+    write_dataframe_to_sheet
+)
+from src.log_handler import authlog_table, get_table_updated
 
 
-def extract_data_from_drive(target: list) -> dict:
-    output_dict = {'raw': None, 'modeled': None}
-    # Get the Google Drive service
-    service = get_drive_service()
+class ETLDataPipeline:
 
-    files = read_metadata(
-        service=service,
-        target_drive_name='Planeacion',  
-        target_parents=['3 Datos', 'Crudos', None],
-        target_folders=target
-    )
-    for folder, file_dict in files.items():
+    validation = {'file_a': None, 'file_b': None}
+    layers = {'raw': 'crudos', 'modeled': 'modelados'}
 
-        logger.debug(f"De la carpeta: {folder} se encontraron: {len(file_dict['files'])} archivos.")
-        # Take the file with the most recent date
-        file_to_download = file_dict['files'][0]
-
-        # Download the file into a DataFrame
-        df = download_file_into_dataframe(service, file_to_download['id'], is_shared_drive=True)
+    @classmethod
+    def start_drive_service(self) -> None:
+        creds = get_gdrive_credentials_for_institutional_account()
+        self.drive_service = get_drive_service(creds=creds)
         
-        # Extract modeled data from the other folders
+    @classmethod
+    def start_sheets_service(self) -> None:
+        creds = get_gsheets_credentials_for_institutional_account()
+        self.sheets_service = get_sheets_service(creds=creds)
 
-        # Add both dataframes into a dictionary
+    @classmethod
+    def read_metadata_from_drive(self, target: list, data_layer: str) -> dict:
+        
+        self.current_layer = data_layer
 
+        return read_metadata(
+            service=self.drive_service,
+            target_drive_name='Planeacion',  
+            target_parents=['3 Datos', self.layers[data_layer], None],
+            target_folders=target,
+            data_layer=self.current_layer,
+        )
 
-        logger.debug(f"Archivo {file_to_download['name']} descargado a dataframe: Shape=({df.shape})")
-    logger.info("Retrieving Google Drive service...")
-    return output_dict
+    # Add upload date for each file
+    @staticmethod
+    def adjust_date_format(date_string, format_string):
+        return datetime.strptime(date_string, format_string)
 
+    # sort data by date
+    @staticmethod
+    def sort_and_get_most_recent(files):
+        files = sorted(files['radicados']['files'], key=lambda x: x['createdTime'], reverse=True)
+        selected_file = files[0] if files else None
+        return selected_file
 
-def check_for_changes_in_data():
-    return None
+    # Extract data
+    @classmethod
+    def extract_(self, files: dict=None, target: str=None) -> tuple:
+        df = pl.DataFrame()
+        if self.current_layer == 'raw':
+            selected_file = self.sort_and_get_most_recent(files)
+            logger.debug(f"Found raw file: {selected_file['name']} with ID: {selected_file['id']}")
+            df = download_csv_into_dataframe(
+                service=self.drive_service, 
+                file_id=selected_file['id'], 
+                is_shared_drive=True
+            )
+        elif self.current_layer == 'modeled':
+            # select the file where the object name is the same as the target
+            selected_file = [f for f in files['all']['files'] if f['name'] == target[0]][0]
 
+            df = download_data_from_sheets(
+                service=self.sheets_service, 
+                spreadsheet_id=selected_file['id'],
+                range_name='Hoja 1'
+            )
 
-def transform_data(df: pl.DataFrame, target: str) -> pl.DataFrame:
-    preprocessing = FBSPreprocessing()
-    
-    if target == 'credito':
-        df = preprocessing.credit_preprocessing(df)
-    elif target == 'radicados':
-        df = preprocessing.radicacion_preprocessing(df)
-    elif target == 'funcionariosCGR':
-        df = preprocessing.funcionarios_cgr_preprocessing(df)
-    else:
-        logger.error(f"Target '{target}' not recognized for transformation.")
-    
-    return df
+        return (df, selected_file)
 
-def load_data_into_drive() -> None:
-    return None
+    # Transform data
+    @classmethod
+    def transform_(self, dataframe: object, selected_file: dict) -> None:
+        # Transform the data
+        if self.current_layer == 'raw':
+            clean_name = selected_file['name']
+            if len(selected_file['name'].split("_")) > 1:
+                clean_name = selected_file['name'].split("_")[1].split(".")[0]
+
+            output_df = self.preprocessing_(input_df=dataframe, subject=clean_name)
+            self.validation['file_a'] = output_df
+            logger.debug("Raw data extracted & transformed successfully.")
+        
+        elif self.current_layer == 'modeled':
+            dataframe = dataframe.with_columns(
+                pl.col('Radicado').cast(pl.Int64),
+                pl.col('Rpta').cast(pl.Int64)
+            )
+            self.validation['file_b'] = dataframe
+            output_df = dataframe
+
+        return output_df
+
+    @staticmethod
+    def preprocessing_(input_df: pl.DataFrame, subject: str) -> pl.DataFrame:
+        preprocessing = FBSPreprocessing()
+        
+        if subject == 'credito':
+            df = preprocessing.credit_preprocessing(input_df)
+        elif subject == 'radicados':
+            df = preprocessing.radicacion_preprocessing(input_df)
+        else:
+            logger.error(f"Target '{subject}' not recognized for transformation.")
+        return df
+
+    @classmethod
+    def load_(self, df: pl.DataFrame, spreadsheet_id: str) -> None:
+        api_response = write_dataframe_to_sheet(
+            service=self.sheets_service,
+            dataframe=df, 
+            spreadsheet_id=spreadsheet_id,
+            sheet_name="Hoja 1",
+            clear_existing=True
+        )
+        logger.debug(f"Load files into google sheets, response={api_response}")
 
 
 if __name__ == "__main__":
     logger.info("Starting ETL process...")
-    
-    target_folders = ['credito', 'radicados', 'funcionariosCGR']
-    target = ['credito']
-    
-    df = extract_data_from_drive(target=target)
+    # target_folders = ['credito', 'radicados', 'funcionariosCGR']
+    pipeline = ETLDataPipeline()
 
-    logger.info("Loading modeled data into google drive...")
+    # Extract data from Google Drive
+    group = ['radicados']
+    layers = ['raw', 'modeled']
+
+    # Extract data for raw files
+    pipeline.start_drive_service()
+    logger.info(f"ETL process for raw files in folder '{group[0]}'")
+    raw_metadata = pipeline.read_metadata_from_drive(target=group, data_layer=layers[0])
+    df, extracted_file = pipeline.extract_(files=raw_metadata)
+    raw_file = pipeline.transform_(df, selected_file=extracted_file)
+
+    # Extract data for modeled files
+    pipeline.start_sheets_service()
+    logger.info(f"ETL process for modeled files in file '{group[0]}'")
+    modeled_metadata = pipeline.read_metadata_from_drive(target=[None], data_layer=layers[1])
+    df, extracted_file = pipeline.extract_(files=modeled_metadata, target=[group[0]])
+    modeled_file = pipeline.transform_(dataframe=df, selected_file=extracted_file)
+
+    # TODO: Generate a log for changes between raw transformed and modeled files
+    log_df = authlog_table(df_a=modeled_file, df_b=raw_file, log_root=group[0])
+    # TODO: Load resulting dataframe into modeled sheets. Save modeled metadata ID.
+    output_df = get_table_updated(df_a=modeled_file, df_b=raw_file)
+
+    # TODO: Write new data into sheets (Group and auth)
+    audit_id = [d for d in modeled_metadata['all']['files'] if d['name'] == 'auditoria'][0]['id']
+    target_id = [d for d in modeled_metadata['all']['files'] if d['name'] == group[0]][0]['id']
+    
+    pipeline.load_(df=output_df, spreadsheet_id=target_id)
+    pipeline.load_(df=log_df, spreadsheet_id=audit_id)
+    logger.info("ETL Process finished...")

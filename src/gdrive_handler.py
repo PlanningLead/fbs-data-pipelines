@@ -9,33 +9,93 @@ import os.path
 from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
+import urllib.parse
 
 
 # Solo lectura de metadatos
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+INSTITUTIONAL_EMAIL = 'cgarcia@fbscgr.gov.co'
 
 
-def get_drive_service():
+def build_auth_url_for_specific_user(authorization_url):
+    """
+    Callback para añadir 'login_hint' a la URL de autorización.
+    """
+    # Parsear la URL para poder añadir o modificar parámetros
+    parsed_url = urllib.parse.urlparse(authorization_url)
+    query_params = urllib.parse.parse_qs(parsed_url.query)
+
+    # Añadir el login_hint
+    query_params['login_hint'] = [INSTITUTIONAL_EMAIL]
+    
+    # Reconstruir la URL
+    new_query = urllib.parse.urlencode(query_params, doseq=True)
+    new_url = parsed_url._replace(query=new_query).geturl()
+    
+    print(f"Abriendo URL de autenticación para {INSTITUTIONAL_EMAIL}:\n{new_url}")
+    return new_url
+
+
+def get_gdrive_credentials_for_institutional_account(token_path: str = 'credentials/drive_token.pickle'):
     creds = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
+    # El archivo token.pickle almacena los tokens de acceso y refresco del usuario
+    if os.path.exists(token_path):
+        with open(token_path, 'rb') as token:
             creds = pickle.load(token)
-            logger_msg = "Credenciales cargadas desde token.pickle"
-            
+            logger_msg = f"Credenciales cargadas desde {token_path}"
+    
+    # Si no hay credenciales (válidas) o si las credenciales existentes no son del usuario deseado,
+    # permite al usuario iniciar sesión.
+    # También puedes forzar la re-autenticación eliminando token.pickle
+    # para asegurar que siempre se presente la pantalla de selección de cuenta.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
-            logger_msg = "Credenciales refrescadas"
+            logger_msg = f"Credenciales refrescadas para {token_path}"
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
-            logger_msg = "Nuevas credenciales guardadas en token.pickle"
-    logger.info(logger_msg)
-    return build('drive', 'v3', credentials=creds)
+            flow = InstalledAppFlow.from_client_secrets_file('credentials/google_credentials.json', SCOPES)
 
+            # run_local_server acepta el callback para modificar la URL antes de abrirla.
+            creds = flow.run_local_server(
+                port=0,
+                authorization_url_callback=build_auth_url_for_specific_user,
+                prompt='select_account',  # Esto fuerza la pantalla de selección de cuenta
+            )
+        # Guarda las credenciales para la próxima ejecución
+        logger_msg = f"Nuevas credenciales para Google Drive guardadas en {token_path}"
+        with open(token_path, 'wb') as token:
+            pickle.dump(creds, token)
+    logger.debug(logger_msg)
+    # Retorna las credenciales
+    return creds
+
+
+def get_drive_service(creds: object = None):
+    
+    if not creds:
+        if os.path.exists('drive_token.pickle'):
+            with open('drive_token.pickle', 'rb') as token:
+                creds = pickle.load(token)
+                logger_msg = "Credenciales cargadas desde drive_token.pickle"
+                
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+                logger_msg = "Credenciales refrescadas"
+            else:
+                flow = InstalledAppFlow.from_client_secrets_file(
+                    'google_credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
+            with open('drive_token.pickle', 'wb') as token:
+                pickle.dump(creds, token)
+                logger_msg = "Nuevas credenciales para Google Drive guardadas en drive_token.pickle"
+        logger.debug(logger_msg)
+        return build('drive', 'v3', credentials=creds)
+    
+    else:
+        logger.debug("Usando credenciales proporcionadas directamente.")
+        return build('drive', 'v3', credentials=creds)
+    
 
 def list_all_shared_drives(service: object = None):
     """Lista todas las Unidades Compartidas a las que el usuario tiene acceso."""
@@ -69,7 +129,7 @@ def list_all_shared_drives(service: object = None):
     return all_shared_drives
 
 
-def list_files_and_folders(service, location_id=None, is_shared_drive=False, page_size=100, file_type=None, search_name=None):
+def list_files_and_folders(service, location_id=None, is_shared_drive=False, page_size=100, file_type=None, search_name=None) -> list:
     page_token = None
     all_files = []
     
@@ -95,7 +155,7 @@ def list_files_and_folders(service, location_id=None, is_shared_drive=False, pag
         try:
             results = service.files().list(
                 pageSize=page_size,
-                fields="nextPageToken, files(id, name, mimeType, parents)",
+                fields="nextPageToken, files(id, name, mimeType, parents, createdTime, modifiedTime)",
                 includeItemsFromAllDrives=is_shared_drive, # Incluir si es Unidad Compartida
                 supportsAllDrives=is_shared_drive,         # Necesario para el anterior
                 q=full_query,
@@ -106,8 +166,8 @@ def list_files_and_folders(service, location_id=None, is_shared_drive=False, pag
             all_files.extend(items)
             
             # Imprimir progreso si hay muchos archivos
-            if len(all_files) % 1000 == 0 and len(all_files) > 0:
-                print(f"  Archivos encontrados hasta ahora en esta ubicación: {len(all_files)}")
+            # if len(all_files) % 1000 == 0 and len(all_files) > 0:
+            #     print(f"  Archivos encontrados hasta ahora en esta ubicación: {len(all_files)}")
 
             page_token = results.get('nextPageToken', None)
             if not page_token:
@@ -123,7 +183,7 @@ def list_files_and_folders(service, location_id=None, is_shared_drive=False, pag
     return all_files
 
 
-def read_metadata(service, target_drive_name: str=None, target_parents: list=[], target_folders: list=[]) -> list:
+def read_metadata(service, target_drive_name: str=None, target_parents: list=[], target_folders: list=[], data_layer: str=None) -> list:
     # Get the ids and names of all shared drives
     shared_drives = list_all_shared_drives(service=service)
 
@@ -133,7 +193,7 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
     for drive in shared_drives:
         if drive['name'] == target_drive_name:
             target_drive_id = drive['id']
-            logger.info(f"Shared Drive '{target_drive_name}' found with ID: {target_drive_id}")
+            logger.debug(f"Shared Drive '{target_drive_name}' found with ID: {target_drive_id}")
             break
 
     # Get all files and folders in the shared drive
@@ -155,19 +215,25 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
     for f in target_folders:
         # Search for a column value in a list of dictionaries
         folder_match = next((d for d in files_and_folders if d.get("name") == f), None)
-        target_files = list_files_and_folders(
-            service,
-            location_id=folder_match['id'], 
-            is_shared_drive=True,
-            search_name=None
-        )
-        # Append to dictionary for each folder
-        files_dict[f] = {'location_id': folder_match['id'], 'files': target_files} 
-    logger.info("Data files and folders found successfully.")
+        if data_layer == 'raw':
+            target_files = list_files_and_folders(
+                service,
+                location_id=folder_match['id'], 
+                is_shared_drive=True,
+                search_name=None
+            )
+            # Append to dictionary for each folder
+            files_dict[f] = {'location_id': folder_match['id'], 'files': target_files}
+        elif data_layer == 'modeled':
+            if folder_match:
+                files_dict[f] = {'location_id': folder_match['id'], 'files': [folder_match]}
+            else:
+                files_dict['all'] = {'location_id': files_and_folders[0]['parents'][0], 'files': files_and_folders}
+    logger.debug(f"Data files and folders in {data_layer} layer found successfully.")
     return files_dict
 
 
-def download_file_into_dataframe(service, file_id, is_shared_drive=False):
+def download_csv_into_dataframe(service, file_id, is_shared_drive=False):
     try:
         # Request para descargar el archivo.
         # supportsAllDrives es crucial si el archivo está en una Unidad Compartida.
@@ -184,10 +250,10 @@ def download_file_into_dataframe(service, file_id, is_shared_drive=False):
 
         while not done:
             status, done = downloader.next_chunk()
-
-            # Add progress bar using tqdm library if needed
-            logger.debug(f"Descargando {file_id}... Progreso: {int(status.progress() * 100)}%")
-        logger.debug(f"\nDescarga de '{file_id}' completada. Tamaño en memoria: {download_buffer.tell()} bytes.")
+        
+        mb_value =  download_buffer.tell() / (1024 * 1024)
+        logger.warning(f"File '{file_id}' download progress: {int(status.progress() * 100)}%")
+        logger.warning(f"File Memory size: {round(mb_value, 3)} megabytes (Mb).")
 
         raw_bytes_content = download_buffer.getvalue() 
 
@@ -199,12 +265,13 @@ def download_file_into_dataframe(service, file_id, is_shared_drive=False):
 
     except Exception as e:
         logger.error(f"Error al descargar el archivo '{file_id}': {e}")
-        return False
+        return None
 
 
 if __name__ == '__main__':
     # Get the Google Drive service
-    service = get_drive_service()
+    creds = get_gdrive_credentials_for_institutional_account()
+    service = get_drive_service(creds=creds)
 
     target_folders = ['credito', 'radicados', 'funcionariosCGR']
     files = read_metadata(
@@ -224,6 +291,6 @@ if __name__ == '__main__':
         local_download_path = os.path.join(os.getcwd(), 'temp_data', f"{download_file_name}.parquet") # Guarda en el mismo directorio del script
 
         # 3. Descarga el archivo
-        df = download_file_into_dataframe(service, file_to_download['id'], local_download_path, is_shared_drive=True)
+        df = download_csv_into_dataframe(service, file_to_download['id'], local_download_path, is_shared_drive=True)
         
         logger.debug(f"Archivo {file_to_download['name']} descargado a dataframe: Shape=({df.shape})")
