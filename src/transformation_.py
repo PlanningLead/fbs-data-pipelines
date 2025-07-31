@@ -2,7 +2,6 @@ import polars as pl
 from datetime import date
 from loguru import logger
 import os
-import random
 
 
 class FBSPreprocessing:
@@ -129,9 +128,9 @@ class FBSPreprocessing:
             .otherwise(
             # Si NO contiene guion (es un nombre completo)
             pl.struct([
-                pl.lit(None, dtype=pl.String).alias("cargo_destino"), # Cargo: Nulo
-                pl.lit("TL", dtype=pl.String).alias("cod_grupo_destino"), # Grupo: Nulo
-                pl.lit("GRUPO ATENCIÓN AL USUARIO", dtype=pl.String).alias("funcionario_destino"), # Funcionario: El valor completo
+                pl.lit(None, dtype=pl.String).alias("cargo_destino"),
+                pl.lit("GAUEGI", dtype=pl.String).alias("cod_grupo_destino"),
+                pl.lit(None, dtype=pl.String).alias("funcionario_destino"),
             ])
             )
         ).unnest('array_destino')
@@ -142,30 +141,11 @@ class FBSPreprocessing:
                 .replace_strict(self.working_group_dict, default=None)
                 .alias("grupo_destino")
             )
+
+        # TODO: Add a field that Finds the service level. End date - Start date < 30 days
+        # TODO: Start running nlp analysis
+        # TODO: Add nature tree into the data
         return output_df
-
-
-def column_row_match_analyzer(sample_size: int, headers: list, data: list):
-
-    random_rows = random.choices(k=sample_size, population=range(len(data)))
-    output = []
-    for r in random_rows:
-        output.append(len(data[r]) == len(headers))
-    
-    null_value_rate = 1 - (sum(output) / sample_size)
-    return float(round(null_value_rate, 3))
-
-
-def column_row_shape_match(headers: list, data: list):
-    num_columns = len(headers)
-    processed_data = []
-    for row in data:
-        # Asegura que cada fila tenga la misma cantidad de columnas que los encabezados
-        # Si la fila es más corta, rellena con None para las columnas faltantes
-        if len(row) < num_columns:
-            row.extend([None] * (num_columns - len(row)))
-        processed_data.append(row)
-    return processed_data
 
 
 if __name__ == '__main__':

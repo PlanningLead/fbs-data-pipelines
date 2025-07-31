@@ -6,7 +6,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from loguru import logger
 import urllib.parse
-from src.transformation_ import column_row_match_analyzer, column_row_shape_match 
+from src.utils_ import column_row_match_analyzer, column_row_shape_match 
 
 
 # Asegúrate de incluir el scope para Google Sheets
@@ -35,7 +35,7 @@ def build_auth_url_for_specific_user(authorization_url):
     return new_url
 
 
-def get_gsheets_credentials_for_institutional_account(token_path: str = 'sheets_token.pickle'):
+def get_gsheets_credentials_for_institutional_account(token_path: str = 'credentials/sheets_token.pickle'):
     creds = None
     # El archivo token.pickle almacena los tokens de acceso y refresco del usuario
     if os.path.exists(token_path):
@@ -52,8 +52,7 @@ def get_gsheets_credentials_for_institutional_account(token_path: str = 'sheets_
             creds.refresh(Request())
             logger_msg = f"Credenciales refrescadas para {token_path}"
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'google_credentials.json', SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file('credentials/google_credentials.json', SCOPES)
             
             # --- ¡LA CLAVE ESTÁ AQUÍ! ---
             # run_local_server acepta el callback para modificar la URL antes de abrirla.
@@ -127,7 +126,7 @@ def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: 
         return None
     
 
-def write_dataframe_to_sheet(dataframe, spreadsheet_id, sheet_name='Sheet1', start_cell='A1', clear_existing=True):
+def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='Sheet1', start_cell='A1', clear_existing=True) -> dict:
     """
     Escribe un DataFrame de pandas en una Google Sheet existente.
 
@@ -143,13 +142,11 @@ def write_dataframe_to_sheet(dataframe, spreadsheet_id, sheet_name='Sheet1', sta
     Returns:
         dict: La respuesta de la API de Sheets o None si hay un error.
     """
-    service = get_sheets_service()
-
     # Convertir el DataFrame a una lista de listas (incluyendo los encabezados)
-    # Esto es el formato que la API de Sheets espera
-    data_to_write = dataframe.astype(str).values.tolist() # Convertir a str para evitar problemas de tipos
+    # Esto es el formato que la API de Sheets espera Convertir a str para evitar problemas de tipos
+    data_to_write = dataframe.with_columns(pl.all().cast(pl.String)).rows()
     # Añadir los encabezados del DataFrame
-    data_to_write.insert(0, dataframe.columns.tolist())
+    data_to_write.insert(0, dataframe.columns)
 
     # Definir el rango donde se escribirán los datos
     # Por ejemplo, si start_cell es 'A1' y sheet_name es 'Datos', el rango sería 'Datos!A1'
@@ -158,7 +155,7 @@ def write_dataframe_to_sheet(dataframe, spreadsheet_id, sheet_name='Sheet1', sta
     try:
         # 1. (Opcional) Borrar el contenido existente en el rango
         if clear_existing:
-            print(f"Limpiando rango '{range_name}' en la hoja '{spreadsheet_id}'...")
+            logger.debug(f"Limpiando rango '{range_name}' en la hoja '{spreadsheet_id}'...")
             clear_body = {} # Un cuerpo vacío significa borrar todo el rango
             request = service.spreadsheets().values().clear(
                 spreadsheetId=spreadsheet_id, 
@@ -166,7 +163,7 @@ def write_dataframe_to_sheet(dataframe, spreadsheet_id, sheet_name='Sheet1', sta
                 body=clear_body
             )
             response = request.execute()
-            print(f"Rango limpiado: {response.get('clearedRange')}")
+            logger.warning(f"Rango limpiado: {response.get('clearedRange')}")
 
         # 2. Escribir los nuevos datos
         body = {
@@ -182,7 +179,7 @@ def write_dataframe_to_sheet(dataframe, spreadsheet_id, sheet_name='Sheet1', sta
             body=body
         ).execute()
         
-        print(f"{result.get('updatedCells')} celdas actualizadas en la hoja '{sheet_name}'.")
+        logger.debug(f"{result.get('updatedCells')} celdas actualizadas en la hoja '{sheet_name}'.")
         return result
 
     except Exception as e:
@@ -192,43 +189,3 @@ def write_dataframe_to_sheet(dataframe, spreadsheet_id, sheet_name='Sheet1', sta
 # --- Ejemplo de uso ---
 if __name__ == '__main__':
     print('Hola mundo')
-    # 1. Crear un DataFrame de ejemplo (reemplaza esto con tu DataFrame real modelado)
-    # data = {
-    #     'Producto': ['Laptop', 'Mouse', 'Teclado', 'Monitor'],
-    #     'Cantidad': [10, 50, 30, 5],
-    #     'Precio_USD': [1200.50, 25.00, 75.99, 300.00],
-    #     'Fecha_Actualizacion': [
-    #         pd.to_datetime('2025-07-01'), 
-    #         pd.to_datetime('2025-06-28'), 
-    #         pd.to_datetime('2025-07-01'), 
-    #         pd.to_datetime('2025-06-30')
-    #     ]
-    # }
-    # df_to_write = pd.DataFrame(data)
-    
-    # print("DataFrame a escribir:")
-    # print(df_to_write)
-
-    # # 2. Configura el ID de tu hoja de cálculo y el nombre de la pestaña
-    # # --- ¡CAMBIA ESTO CON TUS VALORES REALES! ---
-    # target_spreadsheet_id = '1AbcDEfGhiJkLmNoPqRsTuVwXyZ0123456789' # ID de tu Google Sheet
-    # target_sheet_name = 'Datos Procesados' # Nombre de la pestaña (ej. 'Sheet1', 'Hoja1', 'Resultados')
-    # start_cell_to_write = 'A1' # Celda donde empezar a escribir (ej. 'A1' para toda la hoja)
-    
-    # # 3. Llamar a la función para escribir el DataFrame
-    # if target_spreadsheet_id == '1AbcDEfGhiJkLmNoPqRsTuVwXyZ0123456789':
-    #     print("\n*** ADVERTENCIA: Por favor, actualiza 'target_spreadsheet_id' con un ID real de tu Google Sheet para probar. ***\n")
-    # else:
-    #     print(f"\nIntentando escribir DataFrame en Google Sheet ID: {target_spreadsheet_id}, Pestaña: '{target_sheet_name}', Celda de inicio: '{start_cell_to_write}'")
-    #     write_response = write_dataframe_to_sheet(
-    #         df_to_write,
-    #         target_spreadsheet_id,
-    #         sheet_name=target_sheet_name,
-    #         start_cell=start_cell_to_write,
-    #         clear_existing=True # Esto es crucial para reemplazar datos
-    #     )
-        
-    #     if write_response:
-    #         print("\nDataFrame escrito con éxito en Google Sheets.")
-    #     else:
-    #         print("\nError al escribir DataFrame en Google Sheets.")

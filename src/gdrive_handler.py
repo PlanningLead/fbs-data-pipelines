@@ -36,7 +36,7 @@ def build_auth_url_for_specific_user(authorization_url):
     return new_url
 
 
-def get_gdrive_credentials_for_institutional_account(token_path: str = 'drive_token.pickle'):
+def get_gdrive_credentials_for_institutional_account(token_path: str = 'credentials/drive_token.pickle'):
     creds = None
     # El archivo token.pickle almacena los tokens de acceso y refresco del usuario
     if os.path.exists(token_path):
@@ -53,10 +53,8 @@ def get_gdrive_credentials_for_institutional_account(token_path: str = 'drive_to
             creds.refresh(Request())
             logger_msg = f"Credenciales refrescadas para {token_path}"
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                'google_credentials.json', SCOPES)
-            
-            # --- ¡LA CLAVE ESTÁ AQUÍ! ---
+            flow = InstalledAppFlow.from_client_secrets_file('credentials/google_credentials.json', SCOPES)
+
             # run_local_server acepta el callback para modificar la URL antes de abrirla.
             creds = flow.run_local_server(
                 port=0,
@@ -98,7 +96,6 @@ def get_drive_service(creds: object = None):
         logger.debug("Usando credenciales proporcionadas directamente.")
         return build('drive', 'v3', credentials=creds)
     
-
 
 def list_all_shared_drives(service: object = None):
     """Lista todas las Unidades Compartidas a las que el usuario tiene acceso."""
@@ -228,7 +225,10 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
             # Append to dictionary for each folder
             files_dict[f] = {'location_id': folder_match['id'], 'files': target_files}
         elif data_layer == 'modeled':
-            files_dict[f] = {'location_id': folder_match['id'], 'files': [folder_match]}
+            if folder_match:
+                files_dict[f] = {'location_id': folder_match['id'], 'files': [folder_match]}
+            else:
+                files_dict['all'] = {'location_id': files_and_folders[0]['parents'][0], 'files': files_and_folders}
     logger.debug(f"Data files and folders in {data_layer} layer found successfully.")
     return files_dict
 
