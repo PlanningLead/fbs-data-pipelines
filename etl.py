@@ -1,20 +1,20 @@
 from loguru import logger
-from transformation_utils import FBSPreprocessing
+from src.transformation_ import FBSPreprocessing
 from datetime import datetime
 import polars as pl
 
-from gdrive_handler import (get_drive_service, 
+from src.gdrive_handler import (get_drive_service, 
                             read_metadata, 
                             download_csv_into_dataframe, 
                             get_gdrive_credentials_for_institutional_account)
 
-from gsheets_handler import (get_gsheets_credentials_for_institutional_account,
+from src.gsheets_handler import (get_gsheets_credentials_for_institutional_account,
                              get_sheets_service,
                              download_data_from_sheets)
 
 
 
-class dataPipeline:
+class ETLDataPipeline:
 
     validation = {'file_a': None, 'file_b': None}
 
@@ -29,7 +29,7 @@ class dataPipeline:
         self.sheets_service = get_sheets_service(creds=creds)
 
     @classmethod
-    def extract_metadata_from_drive(self, target: list, data_layer: str) -> dict:
+    def read_metadata_from_drive(self, target: list, data_layer: str) -> dict:
         layers = {'raw': 'crudos', 'modeled': 'modelados'}
         self.current_layer = data_layer
 
@@ -43,11 +43,9 @@ class dataPipeline:
 
     # Add upload date for each file
     @staticmethod
-    def adjust_date_format():
-        date_string_3 = "2021-11-24T16:05:51.399+0000"
-        format_string_3 = "%Y-%m-%dT%H:%M:%S.%f%z"
-        return datetime.strptime(date_string_3, format_string_3)
-    
+    def adjust_date_format(date_string, format_string):
+        return datetime.strptime(date_string, format_string)
+
     # sort data by date
     @staticmethod
     def sort_and_get_most_recent(files):
@@ -96,19 +94,6 @@ class dataPipeline:
 
         return output_df
 
-    @classmethod
-    def extract_data_from_file():
-        return None
-    
-    @classmethod
-    def check_for_changes_in_data(self):
-        df_a = self.validation['file_a']
-        df_b = self.validation['file_b']
-
-        # use polars to merge dataframes
-        
-        return None
-
     @staticmethod
     def preprocessing_(input_df: pl.DataFrame, subject: str) -> pl.DataFrame:
         preprocessing = FBSPreprocessing()
@@ -129,7 +114,7 @@ class dataPipeline:
 if __name__ == "__main__":
     logger.info("Starting ETL process...")
     # target_folders = ['credito', 'radicados', 'funcionariosCGR']
-    pipeline = dataPipeline()
+    pipeline = ETLDataPipeline()
 
     # Extract data from Google Drive
     group = ['radicados']
@@ -137,7 +122,7 @@ if __name__ == "__main__":
     # Extract data for raw files
     pipeline.start_drive_service()
     logger.info(f"ETL process for raw files in folder '{group[0]}'")
-    raw_metadata = pipeline.extract_metadata_from_drive(target=group, data_layer='raw')
+    raw_metadata = pipeline.read_metadata_from_drive(target=group, data_layer='raw')
     df, extracted_file = pipeline.extract_(files=raw_metadata)
     transformed_file = pipeline.transform_(df, selected_file=extracted_file)
 
