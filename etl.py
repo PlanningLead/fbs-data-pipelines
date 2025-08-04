@@ -19,7 +19,7 @@ from src.log_handler import authlog_table, get_table_updated
 
 class ETLDataPipeline:
 
-    validation = {'file_a': None, 'file_b': None}
+    output = {}
     layers = {'raw': 'crudos', 'modeled': 'modelados'}
 
     @classmethod
@@ -91,7 +91,7 @@ class ETLDataPipeline:
                 clean_name = selected_file['name'].split("_")[1].split(".")[0]
 
             output_df = self.preprocessing_(input_df=dataframe, subject=clean_name)
-            self.validation['file_a'] = output_df
+            self.output['raw'] = output_df
             logger.debug("Raw data extracted & transformed successfully.")
         
         elif self.current_layer == 'modeled':
@@ -99,10 +99,8 @@ class ETLDataPipeline:
                 pl.col('Radicado').cast(pl.Int64),
                 pl.col('Rpta').cast(pl.Int64)
             )
-            self.validation['file_b'] = dataframe
-            output_df = dataframe
-
-        return output_df
+            self.output['modeled'] = dataframe
+            logger.debug("Modeled data extracted & transformed successfully.")
 
     @staticmethod
     def preprocessing_(input_df: pl.DataFrame, subject: str) -> pl.DataFrame:
@@ -127,6 +125,19 @@ class ETLDataPipeline:
         )
         logger.debug(f"Load files into google sheets, response={api_response}")
 
+    @classmethod
+    def run_pipeline(self, target: list, data_layer: str) -> None:
+        self.metadata = self.read_metadata_from_drive(target=target, data_layer=data_layer)
+        (df, selected_file) = self.extract_(files=self.metadata, target=target)
+        self.transform_(dataframe=df, selected_file=selected_file)
+        logger.info(f"ETL process for {data_layer} files completed successfully.")
+
+    def get_ouptut(self) -> dict:
+        return self.output
+
+    def get_ids(self, target_name: str) -> dict:
+        return [d for d in self.metadata['all']['files'] if d['name'] == target_name][0]
+
 
 if __name__ == "__main__":
     logger.info("Starting ETL process...")
@@ -134,32 +145,28 @@ if __name__ == "__main__":
     pipeline = ETLDataPipeline()
 
     # Extract data from Google Drive
-    group = ['radicados']
+    target = ['radicados']
     layers = ['raw', 'modeled']
 
     # Extract data for raw files
     pipeline.start_drive_service()
-    logger.info(f"ETL process for raw files in folder '{group[0]}'")
-    raw_metadata = pipeline.read_metadata_from_drive(target=group, data_layer=layers[0])
-    df, extracted_file = pipeline.extract_(files=raw_metadata)
-    raw_file = pipeline.transform_(df, selected_file=extracted_file)
-
-    # Extract data for modeled files
     pipeline.start_sheets_service()
-    logger.info(f"ETL process for modeled files in file '{group[0]}'")
-    modeled_metadata = pipeline.read_metadata_from_drive(target=[None], data_layer=layers[1])
-    df, extracted_file = pipeline.extract_(files=modeled_metadata, target=[group[0]])
-    modeled_file = pipeline.transform_(dataframe=df, selected_file=extracted_file)
+
+    for l in layers:
+        pipeline.run_pipeline(target=target, data_layer=l)
+
+    raw_file = pipeline.get_ouptut()['raw']
+    modeled_file = pipeline.get_ouptut()['modeled']
 
     # TODO: Generate a log for changes between raw transformed and modeled files
-    log_df = authlog_table(df_a=modeled_file, df_b=raw_file, log_root=group[0])
+    log_df = authlog_table(df_a=modeled_file, df_b=raw_file, log_root=target[0])
     # TODO: Load resulting dataframe into modeled sheets. Save modeled metadata ID.
     output_df = get_table_updated(df_a=modeled_file, df_b=raw_file)
 
-    # TODO: Write new data into sheets (Group and auth)
-    audit_id = [d for d in modeled_metadata['all']['files'] if d['name'] == 'auditoria'][0]['id']
-    target_id = [d for d in modeled_metadata['all']['files'] if d['name'] == group[0]][0]['id']
+    # TODO: Write new data into sheets (target and auth)
+    auth_dict = pipeline.get_ids(target_name='auditoria')
+    target_dict = pipeline.get_ids(target_name=target[0])
     
-    pipeline.load_(df=output_df, spreadsheet_id=target_id)
-    pipeline.load_(df=log_df, spreadsheet_id=audit_id)
+    pipeline.load_(df=output_df, spreadsheet_id=target_dict['id'])
+    pipeline.load_(df=log_df, spreadsheet_id=auth_dict['id'])
     logger.info("ETL Process finished...")

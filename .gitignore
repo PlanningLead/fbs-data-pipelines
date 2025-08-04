@@ -200,5 +200,6 @@ temp_data/
 
 # 2. Credentials
 mycreds.txt
+trash.txt
 google_credentials.json
 *.pickle
