@@ -196,11 +196,6 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
             logger.debug(f"Shared Drive '{target_drive_name}' found with ID: {target_drive_id}")
             break
 
-    # Get all files and folders in the shared drive
-    # Si no se proporciona un location_id, buscamos elementos en la raíz de Mi Unidad que no tienen padres (ya que un elemento en la raíz de Mi Unidad no tiene un parent_id).
-    # Esto es más complejo de manejar con la API directamente para la raíz de Mi Unidad sin un parent_id específico. Una forma común de buscar en la raíz de Mi Unidad es buscar por 'root' en parents.
-    # Sin embargo, el comportamiento de 'root' varía. Para simplicidad, si location_id es None, la función buscará en todos los archivos del usuario, pero puedes refinarlo para 'root' en 'parents' para Mi Unidad, lo cual es más específico y similar a la navegación web.
-
     for p in target_parents:
         if target_drive_id:
             files_and_folders = list_files_and_folders(
@@ -211,11 +206,13 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
             )
         target_drive_id = files_and_folders[0]['id'] if p else None
 
-    files_dict = {}
     for f in target_folders:
-        # Search for a column value in a list of dictionaries
-        folder_match = next((d for d in files_and_folders if d.get("name") == f), None)
+        # Set final value
+        files_dict = {'location_id': files_and_folders[0]['parents'][0], 'files': files_and_folders}
+
+        # Validation is different for raw layer
         if data_layer == 'raw':
+            folder_match = next((d for d in files_and_folders if d.get("name") == f), None)
             target_files = list_files_and_folders(
                 service,
                 location_id=folder_match['id'], 
@@ -223,13 +220,14 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
                 search_name=None
             )
             # Append to dictionary for each folder
-            files_dict[f] = {'location_id': folder_match['id'], 'files': target_files}
+            files_dict = {'folder_id': folder_match['id'], 'files': target_files}
+
         elif data_layer == 'modeled':
             if folder_match:
-                files_dict[f] = {'location_id': folder_match['id'], 'files': [folder_match]}
+                files_dict = {'location_id': folder_match['id'], 'files': [folder_match]}
             else:
-                files_dict['all'] = {'location_id': files_and_folders[0]['parents'][0], 'files': files_and_folders}
-    logger.debug(f"Data files and folders in {data_layer} layer found successfully.")
+                files_dict = {'location_id': files_and_folders[0]['parents'][0], 'files': files_and_folders}
+    logger.debug(f"Data files and folders in {data_layer.upper()} layer found successfully.")
     return files_dict
 
 

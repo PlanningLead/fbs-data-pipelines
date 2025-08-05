@@ -1,4 +1,6 @@
 import random
+from datetime import datetime
+
 
 def column_row_match_analyzer(sample_size: int, headers: list, data: list):
 
@@ -21,3 +23,6 @@ def column_row_shape_match(headers: list, data: list):
             row.extend([None] * (num_columns - len(row)))
         processed_data.append(row)
     return processed_data
+
+def adjust_date_format(date_string, format_string):
+    return datetime.strptime(date_string, format_string)

@@ -24,7 +24,7 @@ class FBSPreprocessing:
     }
 
     @classmethod
-    def credit_preprocessing(self, df: pl.DataFrame) -> None:    
+    def raw_creditos_(self, df: pl.DataFrame) -> None:    
         """
         Clean the DataFrame by converting date columns to datetime and creating an 'edad' column.
         
@@ -50,7 +50,7 @@ class FBSPreprocessing:
         df.columns = new_column_names
 
         # Step 1: Convert interests into numeric
-        logger.info("Step 1 -- Converting interest rates to numeric format")
+        logger.debug("Step 1 -- Converting interest rates to numeric format")
         intereses = df['TasaInterés'].str.replace('%', '')
         temp_intereses = []
         for tax in intereses:
@@ -65,7 +65,7 @@ class FBSPreprocessing:
         df = df.with_columns(pl.Series(temp_intereses, strict=False).alias('TasaInterés'))
 
         # Step 2: Convert dates to correct format
-        logger.info("Step 2 -- Converting date columns to datetime format")
+        logger.debug("Step 2 -- Converting date columns to datetime format")
         date_columns = ['FechaIngreso', 'FechaSolicitud', 'Fecha Acta Aprobación', 'FechaGiro', 'FechaInicio', 'FechaLegalización', 'VencimientoCuota']
 
         df = df.with_columns(
@@ -78,7 +78,7 @@ class FBSPreprocessing:
             pl.col(date_columns[6]).str.to_date().alias(date_columns[6])
         )
         # Step 3: Create 'tiempos' columns
-        logger.info("Step 3 -- Creating time difference columns")
+        logger.debug("Step 3 -- Creating time difference columns")
         df = df.with_columns(
             (pl.col('FechaGiro') - pl.col('FechaSolicitud')).dt.total_days().alias('tiempo_solicitud_giro').cast(pl.Int64),
             (pl.col('FechaInicio') - pl.col('FechaSolicitud')).dt.total_days().alias('tiempo_solicitud_inicio').cast(pl.Int64),
@@ -86,7 +86,7 @@ class FBSPreprocessing:
         )   
 
         # Step 4: Add current date
-        logger.info("Step 4 -- Adding current date column")
+        logger.debug("Step 4 -- Adding current date column")
         current_date = date.today()
         df = df.with_columns(
             pl.lit(current_date).alias('fecha_actual')
@@ -94,7 +94,7 @@ class FBSPreprocessing:
 
         # Step 5: create variable 'tiempo_de_espera'. If 'fecha_giro' is null, do 'fecha_actual' - 'fecha_solicitud'. Finally, convert to days
         # and cast to Int64
-        logger.info("Step 5 -- Creating wait-time column")
+        logger.debug("Step 5 -- Creating wait-time column")
         df = df.with_columns(
             pl.when(pl.col('FechaGiro').is_null())
             .then(
@@ -106,30 +106,7 @@ class FBSPreprocessing:
         return df
 
     @classmethod
-    def save_results_into_local(self, file_name: str, df: pl.DataFrame) -> None:
-        # Check if csv file already exists
-        output_file_name = f"{self.output_folder}/modeled_{file_name.split('_')[1]}"
-
-        if not output_file_name.endswith('.csv'):
-            output_file_name += '.csv'
-
-        try:
-            assert pl.scan_csv(output_file_name).collect().shape[0]
-            logger.warning(f"File {output_file_name} already exists. Overwriting it.")
-
-            # delete the existing file
-            os.remove(output_file_name)
-            # Save the cleaned DataFrame to a new CSV file
-            df.write_csv(f"{output_file_name}")
-        except FileNotFoundError:
-            logger.warning("Saving cleaned DataFrame to CSV")
-            df.write_csv(f"{output_file_name}")
-        finally:
-            logger.info(f"Data saved to {output_file_name}")
-
-
-    @classmethod
-    def radicacion_preprocessing(self, df: pl.DataFrame) -> None:
+    def raw_radicacion_(self, df: pl.DataFrame) -> None:
         
         output_df = df.with_columns(
             pl.col('Fecha Radicacion').str.strptime(pl.Datetime, format="%d/%m/%Y %H:%M", strict=False).alias('Fecha Radicacion')
@@ -159,11 +136,14 @@ class FBSPreprocessing:
                 .replace_strict(self.working_group_dict, default=None)
                 .alias("grupo_destino")
             )
-
-        # TODO: Add a field that Finds the service level. End date - Start date < 30 days
-        # TODO: Start running nlp analysis
-        # TODO: Add nature tree into the data
         return output_df
+
+    @classmethod
+    def modeled_radicacion_(df):
+        return df.with_columns(
+                pl.col('Radicado').cast(pl.Int64),
+                pl.col('Rpta').cast(pl.Int64)
+            )
 
 
 if __name__ == '__main__':

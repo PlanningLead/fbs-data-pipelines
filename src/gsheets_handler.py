@@ -65,7 +65,7 @@ def get_gsheets_credentials_for_institutional_account(token_path: str = 'credent
         logger_msg = f"Nuevas credenciales para Google Drive guardadas en {token_path}"
         with open(token_path, 'wb') as token:
             pickle.dump(creds, token)
-    logger.info(logger_msg)
+    logger.debug(logger_msg)
     # Retorna las credenciales
     return creds
 

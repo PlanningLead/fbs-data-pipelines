@@ -1,3 +1,4 @@
+# Import libraries
 from loguru import logger
 from src.transformation_ import FBSPreprocessing
 from datetime import datetime
@@ -16,7 +17,7 @@ from src.gsheets_handler import (
 )
 from src.log_handler import authlog_table, get_table_updated
 
-
+# Create object to handle the ETL process
 class ETLDataPipeline:
 
     output = {}
@@ -34,9 +35,7 @@ class ETLDataPipeline:
 
     @classmethod
     def read_metadata_from_drive(self, target: list, data_layer: str) -> dict:
-        
         self.current_layer = data_layer
-
         return read_metadata(
             service=self.drive_service,
             target_drive_name='Planeacion',  
@@ -45,72 +44,60 @@ class ETLDataPipeline:
             data_layer=self.current_layer,
         )
 
-    # Add upload date for each file
-    @staticmethod
-    def adjust_date_format(date_string, format_string):
-        return datetime.strptime(date_string, format_string)
-
-    # sort data by date
     @staticmethod
     def sort_and_get_most_recent(files: dict) -> dict:
         files = sorted(files['files'], key=lambda x: x['createdTime'], reverse=True)
         selected_file = files[0] if files else None
         return selected_file
 
-    # Extract data
     @classmethod
     def extract_(self, files: dict=None, target: str=None) -> tuple:
         df = pl.DataFrame()
         if self.current_layer == 'raw':
-            selected_file = self.sort_and_get_most_recent(files[target[0]])
-            logger.debug(f"Found raw file: {selected_file['name']} with ID: {selected_file['id']}")
+            selected_file = self.sort_and_get_most_recent(files)
             df = download_csv_into_dataframe(
                 service=self.drive_service, 
                 file_id=selected_file['id'], 
                 is_shared_drive=True
             )
+    
         elif self.current_layer == 'modeled':
-            # select the file where the object name is the same as the target
             selected_file = [f for f in files['all']['files'] if f['name'] == target[0]][0]
-
+            logger.info(f"Found raw file: {selected_file['name']} with ID: {selected_file['id']}")
             df = download_data_from_sheets(
                 service=self.sheets_service, 
                 spreadsheet_id=selected_file['id'],
                 range_name='Hoja 1'
             )
+        logger.info(f"Extract: {self.current_layer} file {selected_file['name']} processed succesfully")
         return (df, selected_file)
 
     # Transform data
     @classmethod
     def transform_(self, dataframe: object, selected_file: dict) -> None:
         # Transform the data
+        clean_name = selected_file['name']
+
         if self.current_layer == 'raw':
-            clean_name = selected_file['name']
             if len(selected_file['name'].split("_")) > 1:
                 clean_name = selected_file['name'].split("_")[1].split(".")[0]
 
-            output_df = self.preprocessing_(input_df=dataframe, subject=clean_name)
-            self.output['raw'] = output_df
-            logger.debug("Raw data extracted & transformed successfully.")
-        
-        elif self.current_layer == 'modeled':
-            dataframe = dataframe.with_columns(
-                pl.col('Radicado').cast(pl.Int64),
-                pl.col('Rpta').cast(pl.Int64)
-            )
-            self.output['modeled'] = dataframe
-            logger.debug("Modeled data extracted & transformed successfully.")
+        output_df = self.preprocessing_(input_df=dataframe, subject=clean_name, layer=self.current_layer)
+        self.output[self.current_layer] = output_df
+        logger.info(f"Transform: {self.current_layer} data from {clean_name} processed successfully.")
 
     @staticmethod
-    def preprocessing_(input_df: pl.DataFrame, subject: str) -> pl.DataFrame:
+    def preprocessing_(input_df: pl.DataFrame, subject: str, layer: str) -> pl.DataFrame:
         preprocessing = FBSPreprocessing()
-        
-        if subject == 'creditos':
-            df = preprocessing.credit_preprocessing(input_df)
-        elif subject == 'radicados':
-            df = preprocessing.radicacion_preprocessing(input_df)
-        else:
-            logger.error(f"Target '{subject}' not recognized for transformation.")
+        method_name = f"{layer}_{subject}_"
+
+        method_to_call = getattr(preprocessing, method_name, None)
+
+        try:
+            df = method_to_call(input_df)
+        except Exception as e:
+            logger.error(f"Target '{subject}' not recognized for transformation. Method or subject doesn't exist. Error: {e}")
+            
         return df
 
     @classmethod
@@ -129,7 +116,7 @@ class ETLDataPipeline:
         self.metadata = self.read_metadata_from_drive(target=target, data_layer=data_layer)
         (df, selected_file) = self.extract_(files=self.metadata, target=target)
         self.transform_(dataframe=df, selected_file=selected_file)
-        logger.info(f"ETL process for {data_layer} files completed successfully.")
+        logger.info(f"ETL process for {data_layer} files finished.")
 
     def get_ouptut(self) -> dict:
         return self.output
@@ -150,7 +137,6 @@ if __name__ == "__main__":
     # Extract data for raw files
     pipeline.start_drive_service()
     pipeline.start_sheets_service()
-
     for l in layers:
         pipeline.run_pipeline(target=target, data_layer=l)
 
