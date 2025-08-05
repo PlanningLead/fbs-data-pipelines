@@ -52,8 +52,8 @@ class ETLDataPipeline:
 
     # sort data by date
     @staticmethod
-    def sort_and_get_most_recent(files):
-        files = sorted(files['radicados']['files'], key=lambda x: x['createdTime'], reverse=True)
+    def sort_and_get_most_recent(files: dict) -> dict:
+        files = sorted(files['files'], key=lambda x: x['createdTime'], reverse=True)
         selected_file = files[0] if files else None
         return selected_file
 
@@ -62,7 +62,7 @@ class ETLDataPipeline:
     def extract_(self, files: dict=None, target: str=None) -> tuple:
         df = pl.DataFrame()
         if self.current_layer == 'raw':
-            selected_file = self.sort_and_get_most_recent(files)
+            selected_file = self.sort_and_get_most_recent(files[target[0]])
             logger.debug(f"Found raw file: {selected_file['name']} with ID: {selected_file['id']}")
             df = download_csv_into_dataframe(
                 service=self.drive_service, 
@@ -78,7 +78,6 @@ class ETLDataPipeline:
                 spreadsheet_id=selected_file['id'],
                 range_name='Hoja 1'
             )
-
         return (df, selected_file)
 
     # Transform data
@@ -106,7 +105,7 @@ class ETLDataPipeline:
     def preprocessing_(input_df: pl.DataFrame, subject: str) -> pl.DataFrame:
         preprocessing = FBSPreprocessing()
         
-        if subject == 'credito':
+        if subject == 'creditos':
             df = preprocessing.credit_preprocessing(input_df)
         elif subject == 'radicados':
             df = preprocessing.radicacion_preprocessing(input_df)
@@ -145,7 +144,7 @@ if __name__ == "__main__":
     pipeline = ETLDataPipeline()
 
     # Extract data from Google Drive
-    target = ['radicados']
+    target = ['creditos']
     layers = ['raw', 'modeled']
 
     # Extract data for raw files
@@ -158,12 +157,9 @@ if __name__ == "__main__":
     raw_file = pipeline.get_ouptut()['raw']
     modeled_file = pipeline.get_ouptut()['modeled']
 
-    # TODO: Generate a log for changes between raw transformed and modeled files
     log_df = authlog_table(df_a=modeled_file, df_b=raw_file, log_root=target[0])
-    # TODO: Load resulting dataframe into modeled sheets. Save modeled metadata ID.
     output_df = get_table_updated(df_a=modeled_file, df_b=raw_file)
 
-    # TODO: Write new data into sheets (target and auth)
     auth_dict = pipeline.get_ids(target_name='auditoria')
     target_dict = pipeline.get_ids(target_name=target[0])
     

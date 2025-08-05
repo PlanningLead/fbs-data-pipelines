@@ -2,6 +2,8 @@ import polars as pl
 from datetime import date
 from loguru import logger
 import os
+import numpy as np
+from collections import Counter
 
 
 class FBSPreprocessing:
@@ -32,9 +34,24 @@ class FBSPreprocessing:
         Returns:
         DataFrame: The cleaned DataFrame.
         """
+        # Step 0: Delete the first row and rename columns
+        first_row = df[0]
+        df = df[1:]
+        
+        new_column_names = list(first_row.to_numpy()[0])
+        duplicates = [item for item, count in Counter(new_column_names).items() if count > 1]
+        # Check for duplicates in column names. When duplicates are found, add a suffix to the column name
+        if duplicates:
+            for duplicate in duplicates:
+                indices = [i for i, x in enumerate(new_column_names) if x == duplicate]
+                for i, index in enumerate(indices):
+                    new_column_names[index] = f"{duplicate}_{i+1}"
+        
+        df.columns = new_column_names
+
         # Step 1: Convert interests into numeric
         logger.info("Step 1 -- Converting interest rates to numeric format")
-        intereses = df['tasa_interes'].str.replace('%', '')
+        intereses = df['TasaInterés'].str.replace('%', '')
         temp_intereses = []
         for tax in intereses:
             if len(tax) == 6:
@@ -45,11 +62,11 @@ class FBSPreprocessing:
                 tax = float(tax)/10000000
             temp_intereses.append(tax)
         
-        df = df.with_columns(pl.Series(temp_intereses).alias('tasa_interes'))
+        df = df.with_columns(pl.Series(temp_intereses, strict=False).alias('TasaInterés'))
 
         # Step 2: Convert dates to correct format
         logger.info("Step 2 -- Converting date columns to datetime format")
-        date_columns = ['fecha_cargue', 'fecha_solicitud', 'fecha_acta_aprobacion', 'fecha_giro', 'fecha_inicio', 'fecha_legalizacion']
+        date_columns = ['FechaIngreso', 'FechaSolicitud', 'Fecha Acta Aprobación', 'FechaGiro', 'FechaInicio', 'FechaLegalización', 'VencimientoCuota']
 
         df = df.with_columns(
             pl.col(date_columns[0]).str.to_date().alias(date_columns[0]),
@@ -57,14 +74,15 @@ class FBSPreprocessing:
             pl.col(date_columns[2]).str.to_date().alias(date_columns[2]),
             pl.col(date_columns[3]).str.to_date().alias(date_columns[3]),
             pl.col(date_columns[4]).str.to_date().alias(date_columns[4]),
-            pl.col(date_columns[5]).str.to_date().alias(date_columns[5])
+            pl.col(date_columns[5]).str.to_date().alias(date_columns[5]),
+            pl.col(date_columns[6]).str.to_date().alias(date_columns[6])
         )
         # Step 3: Create 'tiempos' columns
         logger.info("Step 3 -- Creating time difference columns")
         df = df.with_columns(
-            (pl.col('fecha_giro') - pl.col('fecha_solicitud')).dt.total_days().alias('tiempo_solicitud_giro').cast(pl.Int64),
-            (pl.col('fecha_inicio') - pl.col('fecha_solicitud')).dt.total_days().alias('tiempo_solicitud_inicio').cast(pl.Int64),
-            (pl.col('fecha_legalizacion') - pl.col('fecha_solicitud')).dt.total_days().alias('tiempo_solicitud_legalizacion').cast(pl.Int64),
+            (pl.col('FechaGiro') - pl.col('FechaSolicitud')).dt.total_days().alias('tiempo_solicitud_giro').cast(pl.Int64),
+            (pl.col('FechaInicio') - pl.col('FechaSolicitud')).dt.total_days().alias('tiempo_solicitud_inicio').cast(pl.Int64),
+            (pl.col('FechaLegalización') - pl.col('FechaSolicitud')).dt.total_days().alias('tiempo_solicitud_legalizacion').cast(pl.Int64),
         )   
 
         # Step 4: Add current date
@@ -78,9 +96,9 @@ class FBSPreprocessing:
         # and cast to Int64
         logger.info("Step 5 -- Creating wait-time column")
         df = df.with_columns(
-            pl.when(pl.col('fecha_giro').is_null())
+            pl.when(pl.col('FechaGiro').is_null())
             .then(
-                (pl.col('fecha_actual') - pl.col('fecha_solicitud')).dt.total_days()
+                (pl.col('fecha_actual') - pl.col('FechaSolicitud')).dt.total_days()
             )
             .alias('tiempo_de_espera')
             .cast(pl.Int64)
