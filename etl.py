@@ -147,7 +147,7 @@ if __name__ == "__main__":
     primary_key_column = data_dict.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
 
     # TODO: VALIDATE THIS
-    target_cols = data_dict["Nombre_columna"]
+    target_cols = list(data_dict["Nombre_columna"])
     modeled = pipeline.get_ouptut()['modeled']
     
 
