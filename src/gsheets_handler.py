@@ -122,9 +122,8 @@ def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: 
         return df
 
     except Exception as e:
-        logger.error(f"Error al leer datos de la hoja de cálculo '{spreadsheet_id}' en el rango '{range_name}': {e}")
-        return None
-    
+        raise(f"Error al leer datos de la hoja de cálculo '{spreadsheet_id}' en el rango '{range_name}': {e}")
+
 
 def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='Sheet1', start_cell='A1', clear_existing=True) -> dict:
     """

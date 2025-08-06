@@ -138,22 +138,13 @@ class FBSPreprocessing:
             )
         return output_df
 
-    @classmethod
+    @staticmethod
     def modeled_radicacion_(df):
         return df.with_columns(
                 pl.col('Radicado').cast(pl.Int64),
                 pl.col('Rpta').cast(pl.Int64)
             )
 
-
-if __name__ == '__main__':
-    file_name = "20250616_radicados_alfanet.csv"
-
-    preprocessing = FBSPreprocessing()
-
-    df = pl.read_csv(f"{preprocessing.input_folder}/{file_name}", encoding='latin1', separator=';', ignore_errors=True)
-    logger.info(f"Processing file: {file_name}")
-
-    df = preprocessing.radicacion_preprocessing(df)
-    
-    preprocessing.save_results_into_local(file_name, df)
+    @staticmethod
+    def modeled_creditos_(df):
+        return df

@@ -3,7 +3,9 @@ from datetime import datetime
 
 
 def column_row_match_analyzer(sample_size: int, headers: list, data: list):
-
+    """ Checks the completeness of the data in random rows. Functions outputs a rate,
+        which indicates the average % of null values of the rows evaluated randomly.
+    """
     random_rows = random.choices(k=sample_size, population=range(len(data)))
     output = []
     for r in random_rows:
@@ -14,6 +16,8 @@ def column_row_match_analyzer(sample_size: int, headers: list, data: list):
 
 
 def column_row_shape_match(headers: list, data: list):
+    """ Makes sure that the shape of the data is the same as the column headers
+    """
     num_columns = len(headers)
     processed_data = []
     for row in data:

@@ -208,7 +208,7 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
 
     for f in target_folders:
         # Set final value
-        files_dict = {'location_id': files_and_folders[0]['parents'][0], 'files': files_and_folders}
+        # files_dict = {'location_id': files_and_folders[0]['parents'][0], 'files': files_and_folders}
 
         # Validation is different for raw layer
         if data_layer == 'raw':
@@ -223,10 +223,13 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
             files_dict = {'folder_id': folder_match['id'], 'files': target_files}
 
         elif data_layer == 'modeled':
-            if folder_match:
-                files_dict = {'location_id': folder_match['id'], 'files': [folder_match]}
-            else:
-                files_dict = {'location_id': files_and_folders[0]['parents'][0], 'files': files_and_folders}
+            folder_match = next((d for d in files_and_folders if d.get("name") == f), None)
+            assert type(folder_match) == dict
+
+            # Get auth files
+            auth_log = next((d for d in files_and_folders if d.get("name") == "auditoria"), None)
+            files_dict = {'folder_id': folder_match['id'], 'files': [folder_match] + [auth_log]}
+
     logger.debug(f"Data files and folders in {data_layer.upper()} layer found successfully.")
     return files_dict
 

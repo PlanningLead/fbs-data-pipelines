@@ -1,13 +1,17 @@
 import polars as pl
 from datetime import datetime
 import uuid
+from loguru import logger
 
 
-def authlog_table(df_a, df_b, log_root: str):
-    # ----------------- Proceso de Detección -----------------
-    # 1. Realizar una unión externa (outer join), esto nos permite comparar filas que existen en ambos y detectar las que faltan.
-    id_col = 'Radicado'
-    
+def authlog_table(df_a, df_b, log_root: str, id_col: str):
+    # ----------------- Proceso de Detección ----------------
+    if df_a.shape[1] != df_b.shape[1]:
+        logger.warning(f"Be carefull with dimensions from modeled and raw data: modeled={df_a.shape} / raw={df_b.shape}")
+
+    if set(df_a.columns) & set(df_b.columns):
+        logger.warning("Be careful")
+    # 1. Realizar una unión externa (outer join), esto nos permite comparar filas que existen en ambos y detectar las que faltan. 
     joined_df = df_a.join(df_b, on=id_col, how='outer', suffix='_b')
 
     # 2. Identificar los registros que han sido modificados, agregados o eliminados.
