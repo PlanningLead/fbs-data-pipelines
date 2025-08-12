@@ -1,7 +1,6 @@
 # Import libraries
 from loguru import logger
-from src.transformation_ import FBSPreprocessing
-from datetime import datetime
+from src.transformation_ import preprocessing
 import polars as pl
 from src.gdrive_handler import (
     get_drive_service, 
@@ -90,13 +89,11 @@ class ETLDataPipeline:
             if len(selected_file['name'].split("_")) > 1:
                 clean_name = selected_file['name'].split("_")[1].split(".")[0]
 
-        output_df = self.preprocessing_(input_df=dataframe, subject=clean_name, layer=self.current_layer)
-        self.output[self.current_layer] = output_df
+        self.output[self.current_layer] = self.preprocessing_(input_df=dataframe, subject=clean_name, layer=self.current_layer)
         logger.info(f"Transform: {self.current_layer} data from {clean_name} processed successfully.")
 
     @staticmethod
     def preprocessing_(input_df: pl.DataFrame, subject: str, layer: str) -> pl.DataFrame:
-        preprocessing = FBSPreprocessing()
         method_name = f"{layer}_{subject}_"
 
         method_to_call = getattr(preprocessing, method_name, None)
@@ -131,7 +128,7 @@ if __name__ == "__main__":
     logger.info("Starting ETL process...")
     pipeline = ETLDataPipeline()
 
-    target = ['creditos']
+    target = ['radicados']
     layers = ['raw', 'modeled']
 
     pipeline.start_drive_service()

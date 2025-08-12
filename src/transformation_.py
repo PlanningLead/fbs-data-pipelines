@@ -106,7 +106,7 @@ class FBSPreprocessing:
         return df
 
     @classmethod
-    def raw_radicacion_(self, df: pl.DataFrame) -> None:
+    def raw_radicados_(self, df: pl.DataFrame) -> None:
         
         output_df = df.with_columns(
             pl.col('Fecha Radicacion').str.strptime(pl.Datetime, format="%d/%m/%Y %H:%M", strict=False).alias('Fecha Radicacion')
@@ -139,7 +139,7 @@ class FBSPreprocessing:
         return output_df
 
     @staticmethod
-    def modeled_radicacion_(df):
+    def modeled_radicados_(df):
         return df.with_columns(
                 pl.col('Radicado').cast(pl.Int64),
                 pl.col('Rpta').cast(pl.Int64)
@@ -148,3 +148,5 @@ class FBSPreprocessing:
     @staticmethod
     def modeled_creditos_(df):
         return df
+
+preprocessing = FBSPreprocessing()
