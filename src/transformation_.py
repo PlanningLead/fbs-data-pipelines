@@ -103,6 +103,15 @@ class FBSPreprocessing:
             .alias('tiempo_de_espera')
             .cast(pl.Int64)
         )
+
+        # Step 6. Cambiar los separadores en el Monto de , a .
+        df = df.with_columns(
+            pl.col("Monto").str.replace_all(",", ".").cast(pl.Float64),
+            pl.col("Monto Aprobado").str.replace_all(",", ".").cast(pl.Float64),
+            pl.col("Saldo").str.replace_all(",", ".").cast(pl.Float64),
+            pl.col("ValorCuota").str.replace_all(",", ".").cast(pl.Float64),
+            # pl.col("Monto Solicitado").str.replace_all(",", "."),
+        )
         return df
 
     @classmethod
@@ -147,6 +156,21 @@ class FBSPreprocessing:
 
     @staticmethod
     def modeled_creditos_(df):
+        df = df.with_columns(
+            pl.when(pl.col("Monto") == "").then(pl.lit("0.0"))                          # Si es vacío, lo reemplaza
+                .otherwise(pl.col("Monto"))                                     # Si no, deja el valor original
+                .alias("Monto"),
+            pl.when(pl.col("Monto Aprobado") == "").then(pl.lit("0.0"))                         # Si es vacío, lo reemplaza
+                .otherwise(pl.col("Monto Aprobado"))                                    # Si no, deja el valor original
+                .alias("Monto Aprobado"),
+            pl.when(pl.col("Saldo") == "").then(pl.lit("0.0"))                         # Si es vacío, lo reemplaza
+                .otherwise(pl.col("Saldo"))                                    # Si no, deja el valor original
+                .alias("Saldo"),
+            pl.when(pl.col("ValorCuota") == "").then(pl.lit("0.0"))                         # Si es vacío, lo reemplaza
+                .otherwise(pl.col("ValorCuota"))                                    # Si no, deja el valor original
+                .alias("ValorCuota"),
+        )
         return df
+
 
 preprocessing = FBSPreprocessing()

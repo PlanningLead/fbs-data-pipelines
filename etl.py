@@ -14,7 +14,7 @@ from src.gsheets_handler import (
     download_data_from_sheets,
     write_dataframe_to_sheet
 )
-from src.log_handler import authlog_table, get_table_updated
+from src.log_handler import authlog_table, get_table_updated, map_data_types
 
 # Create object to handle the ETL process
 class ETLDataPipeline:
@@ -101,7 +101,7 @@ class ETLDataPipeline:
         try:
             df = method_to_call(input_df)
         except Exception as e:
-            raise(f"Target '{subject}' not recognized for transformation. Method or subject doesn't exist. Error: {e}")
+            logger.error(f"Target '{subject}' not recognized for transformation. Method or subject doesn't exist. Error: {e}")
             
         return df
 
@@ -128,7 +128,7 @@ if __name__ == "__main__":
     logger.info("Starting ETL process...")
     pipeline = ETLDataPipeline()
 
-    target = ['radicados']
+    target = ['creditos']
     layers = ['raw', 'modeled']
 
     pipeline.start_drive_service()
@@ -137,22 +137,19 @@ if __name__ == "__main__":
     for l in layers:
         pipeline.run_(target=target, data_layer=l)
 
-    raw_file = pipeline.get_ouptut()['raw']
-    modeled_file = pipeline.get_ouptut()['modeled']
-
     data_dict = pl.read_excel(source="data_dictionary/Diccionario_FBS.xlsx", sheet_name=target[0])
     primary_key_column = data_dict.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
 
-    # TODO: VALIDATE THIS
-    target_cols = list(data_dict["Nombre_columna"])
-    modeled = pipeline.get_ouptut()['modeled']
-    
+    # format data types acording to data dict
+    raw_ = map_data_types(dictionary=data_dict["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['raw'])
+    mod_ = map_data_types(dictionary=data_dict["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['modeled'])
 
     log_df = authlog_table(
         id_col=primary_key_column,
-        df_a=pipeline.get_ouptut()['modeled'], 
-        df_b=pipeline.get_ouptut()['raw'], 
-        log_root=target[0]
+        df_raw=pipeline.get_ouptut()['raw'], 
+        df_modeled=pipeline.get_ouptut()['modeled'], 
+        log_root=target[0],
+        target_cols= list(data_dict.filter(pl.col("Sujeto_auditoria") == 1)["Nombre_columna"])
     )
 
     output_df = get_table_updated(
