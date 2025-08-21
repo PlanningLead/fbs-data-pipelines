@@ -1,5 +1,5 @@
 import polars as pl
-from datetime import datetime
+from datetime import datetime, date
 import uuid
 from loguru import logger
 
@@ -8,7 +8,7 @@ def map_data_types(dictionary, df):
     type_map = {
         "Integer": pl.Int64,
         "String": pl.String,
-        "Timestamp": pl.Date,
+        "Timestamp": pl.Datetime,
         "Float": pl.Float64,
         "Bool": pl.String
         # Puedes añadir más tipos de datos aquí según lo necesites
@@ -19,9 +19,18 @@ def map_data_types(dictionary, df):
     expresiones_de_cast = []
     for col, dtype_str in tipos_en_string.items():
         if col in df.columns:
-            # Si la columna existe, creamos la expresión de cast y la agregamos a la lista
-            expresion = pl.col(col).cast(type_map[dtype_str])
-            expresiones_de_cast.append(expresion)
+            if dtype_str != "Timestamp":
+                # Si la columna existe, creamos la expresión de cast y la agregamos a la lista
+                expresion = pl.col(col).cast(type_map[dtype_str])
+                expresiones_de_cast.append(expresion)
+            else:
+                # check if element is string or not
+                if not isinstance(df[col].to_list()[0], date):
+                    expresion = pl.col(col).str.strptime(type_map[dtype_str], format="%d/%m/%Y")
+                    expresiones_de_cast.append(expresion)
+                else:
+                    expresion = pl.col(col).cast(type_map[dtype_str])
+                    expresiones_de_cast.append(expresion)
         else:
             # Si la columna no existe, la omitimos y puedes imprimir un mensaje
             logger.warning(f"⚠️ Aviso: La columna '{col}' no se encontró y se omitirá del proceso de cast.")

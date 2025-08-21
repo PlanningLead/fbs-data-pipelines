@@ -170,6 +170,9 @@ class FBSPreprocessing:
                 .otherwise(pl.col("ValorCuota"))                                    # Si no, deja el valor original
                 .alias("ValorCuota"),
         )
+        df = df.with_columns(
+                pl.when(pl.all() == "").then(None).otherwise(pl.all())
+        )
         return df
 
 
