@@ -1,6 +1,6 @@
 # Retrieve data from google drive and load it into a polars dataframe
 import polars as pl
-from datetime import date
+import duckdb
 import io, os.path
 from googleapiclient.http import MediaIoBaseDownload
 from loguru import logger
@@ -15,6 +15,7 @@ import urllib.parse
 # Solo lectura de metadatos
 SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
 INSTITUTIONAL_EMAIL = 'cgarcia@fbscgr.gov.co'
+DB_PATH = 'db/fbs_data.duckdb'
 
 
 def build_auth_url_for_specific_user(authorization_url):
@@ -31,8 +32,7 @@ def build_auth_url_for_specific_user(authorization_url):
     # Reconstruir la URL
     new_query = urllib.parse.urlencode(query_params, doseq=True)
     new_url = parsed_url._replace(query=new_query).geturl()
-    
-    print(f"Abriendo URL de autenticación para {INSTITUTIONAL_EMAIL}:\n{new_url}")
+
     return new_url
 
 
@@ -71,31 +71,12 @@ def get_gdrive_credentials_for_institutional_account(token_path: str = 'credenti
 
 
 def get_drive_service(creds: object = None):
-    
-    if not creds:
-        if os.path.exists('drive_token.pickle'):
-            with open('drive_token.pickle', 'rb') as token:
-                creds = pickle.load(token)
-                logger_msg = "Credenciales cargadas desde drive_token.pickle"
-                
-        if not creds or not creds.valid:
-            if creds and creds.expired and creds.refresh_token:
-                creds.refresh(Request())
-                logger_msg = "Credenciales refrescadas"
-            else:
-                flow = InstalledAppFlow.from_client_secrets_file(
-                    'google_credentials.json', SCOPES)
-                creds = flow.run_local_server(port=0)
-            with open('drive_token.pickle', 'wb') as token:
-                pickle.dump(creds, token)
-                logger_msg = "Nuevas credenciales para Google Drive guardadas en drive_token.pickle"
-        logger.debug(logger_msg)
-        return build('drive', 'v3', credentials=creds)
-    
+    """Autentica y devuelve el objeto de servicio de Google Drive."""
+    if creds is None:
+        logger.error("Credenciales no proporcionadas. Llama a get_google_credentials_for_institutional_account primero.")
     else:
-        logger.debug("Usando credenciales proporcionadas directamente.")
         return build('drive', 'v3', credentials=creds)
-    
+
 
 def list_all_shared_drives(service: object = None):
     """Lista todas las Unidades Compartidas a las que el usuario tiene acceso."""
@@ -234,7 +215,7 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
     return files_dict
 
 
-def download_csv_into_dataframe(service, file_id, is_shared_drive=False):
+def download_csv_into_duckdb(service, file_id, file_name, is_shared_drive=False) -> tuple[str, object]:
     try:
         # Request para descargar el archivo.
         # supportsAllDrives es crucial si el archivo está en una Unidad Compartida.
@@ -253,20 +234,29 @@ def download_csv_into_dataframe(service, file_id, is_shared_drive=False):
             status, done = downloader.next_chunk()
         
         mb_value =  download_buffer.tell() / (1024 * 1024)
-        logger.warning(f"File '{file_id}' download progress: {int(status.progress() * 100)}%")
-        logger.warning(f"File Memory size: {round(mb_value, 3)} megabytes (Mb).")
+        logger.warning(f"File {file_name} with id:'{file_id}' / download progress: {int(status.progress() * 100)}%")
+        
+        if mb_value > 10:
+            logger.warning(f"File Memory size: {round(mb_value, 3)} megabytes (Mb).")
 
         raw_bytes_content = download_buffer.getvalue() 
 
         polars_buffer = io.BytesIO(raw_bytes_content)
         polars_buffer.seek(0)  # Reset the buffer position to the beginning
+
+        # Use duckdb to read the CSV content from the BytesIO object
+        with duckdb.connect(':memory:') as conn:
+            raw_tbl = duckdb.read_csv(polars_buffer, sep=",", connection=conn)
+            table_name = f"raw_{file_name}"
+            query = f'CREATE TABLE {table_name} AS SELECT * FROM {raw_tbl}'
+            data_table = conn.sql(query)
+
         # Read the content directly from the new BytesIO object with pandas
-        df = pl.read_csv(polars_buffer, encoding='latin-1', separator=';')
-        return df
+        return (table_name, data_table)
 
     except Exception as e:
         logger.error(f"Error al descargar el archivo '{file_id}': {e}")
-        return None
+        return (None, None)
 
 
 if __name__ == '__main__':
@@ -274,24 +264,3 @@ if __name__ == '__main__':
     creds = get_gdrive_credentials_for_institutional_account()
     service = get_drive_service(creds=creds)
 
-    target_folders = ['credito', 'radicados', 'funcionariosCGR']
-    files = read_metadata(
-        service=service,
-        target_drive_name='Planeacion',  
-        target_parents=['3 Datos', 'Crudos', None],
-        target_folders=target_folders
-    )
-
-    for folder, file_dict in files.items():
-
-        logger.debug(f"De la carpeta: {folder} se encontraron: {len(file_dict['files'])} archivos.")
-        file_to_download = file_dict['files'][0] # Tomamos el primer CSV encontrado
-
-        # 2. Define la ruta local donde guardar el CSV
-        download_file_name = file_to_download['name'].split(".")[0].split("_")[-1]
-        local_download_path = os.path.join(os.getcwd(), 'temp_data', f"{download_file_name}.parquet") # Guarda en el mismo directorio del script
-
-        # 3. Descarga el archivo
-        df = download_csv_into_dataframe(service, file_to_download['id'], local_download_path, is_shared_drive=True)
-        
-        logger.debug(f"Archivo {file_to_download['name']} descargado a dataframe: Shape=({df.shape})")

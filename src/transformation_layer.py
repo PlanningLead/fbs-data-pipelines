@@ -1,12 +1,11 @@
 import polars as pl
 from datetime import date
 from loguru import logger
-import os
-import numpy as np
+import duckdb
 from collections import Counter
 
 
-class FBSPreprocessing:
+class FBSTransformer:
     
     input_folder = "C:/Users/cgarcia/Documents/datos/crudos"
     output_folder = "C:/Users/cgarcia/Documents/datos/modelados"
@@ -176,4 +175,4 @@ class FBSPreprocessing:
         return df
 
 
-preprocessing = FBSPreprocessing()
+transformer = FBSTransformer()

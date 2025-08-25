@@ -28,5 +28,6 @@ def column_row_shape_match(headers: list, data: list):
         processed_data.append(row)
     return processed_data
 
+
 def adjust_date_format(date_string, format_string):
     return datetime.strptime(date_string, format_string)

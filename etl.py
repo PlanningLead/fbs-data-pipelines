@@ -1,24 +1,32 @@
 # Import libraries
 from loguru import logger
-from src.transformation_ import preprocessing
 import polars as pl
+import pandas as pd
+import os
+import duckdb
+from src.transformation_layer import transformer
+from src.extraction_layer import extractor
+
 from src.gdrive_handler import (
     get_drive_service, 
     read_metadata, 
-    download_csv_into_dataframe, 
     get_gdrive_credentials_for_institutional_account
 )
 from src.gsheets_handler import (
     get_gsheets_credentials_for_institutional_account,
     get_sheets_service,
-    download_data_from_sheets,
     write_dataframe_to_sheet
 )
 from src.log_handler import authlog_table, get_table_updated, map_data_types
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 
 # Create object to handle the ETL process
 class ETLDataPipeline:
-
+    
     output = {}
     layers = {'raw': 'crudos', 'modeled': 'modelados'}
 
@@ -51,31 +59,17 @@ class ETLDataPipeline:
             data_layer=self.current_layer,
         )
 
-    @staticmethod
-    def sort_and_get_most_recent(files: dict) -> dict:
-        files = sorted(files['files'], key=lambda x: x['createdTime'], reverse=True)
-        selected_file = files[0] if files else None
-        return selected_file
-
     @classmethod
     def extract_(self, files: dict=None, target: str=None) -> tuple:
         df = pl.DataFrame()
-        if self.current_layer == 'raw':
-            selected_file = self.sort_and_get_most_recent(files)
-            df = download_csv_into_dataframe(
-                service=self.drive_service, 
-                file_id=selected_file['id'], 
-                is_shared_drive=True
-            )
-    
-        elif self.current_layer == 'modeled':
-            selected_file = [f for f in files['files'] if f['name'] == target[0]][0]
-            logger.info(f"Found raw file: {selected_file['name']} with ID: {selected_file['id']}")
-            df = download_data_from_sheets(
-                service=self.sheets_service, 
-                spreadsheet_id=selected_file['id'],
-                range_name='Hoja 1'
-            )
+        method_name = f"{self.current_layer}_data_extraction"
+        method_to_call = getattr(transformer, method_name, None)
+
+        try:
+            pass
+        except:
+            pass
+        
         logger.info(f"Extract: {self.current_layer} file {selected_file['name']} processed succesfully")
         return (df, selected_file)
 
@@ -89,20 +83,16 @@ class ETLDataPipeline:
             if len(selected_file['name'].split("_")) > 1:
                 clean_name = selected_file['name'].split("_")[1].split(".")[0]
 
-        self.output[self.current_layer] = self.preprocessing_(input_df=dataframe, subject=clean_name, layer=self.current_layer)
-        logger.info(f"Transform: {self.current_layer} data from {clean_name} processed successfully.")
+        method_name = f"{self.current_layer}_{clean_name}_"
 
-    @staticmethod
-    def preprocessing_(input_df: pl.DataFrame, subject: str, layer: str) -> pl.DataFrame:
-        method_name = f"{layer}_{subject}_"
-
-        method_to_call = getattr(preprocessing, method_name, None)
+        method_to_call = getattr(transformer, method_name, None)
 
         try:
-            df = method_to_call(input_df)
+            df = method_to_call(dataframe)
         except Exception as e:
-            logger.error(f"Target '{subject}' not recognized for transformation. Method or subject doesn't exist. Error: {e}")
-            
+            logger.error(f"Target '{clean_name}' not recognized for transformation. Method or subject doesn't exist. Error: {e}")
+        
+        logger.info(f"Transform: {self.current_layer} data from {clean_name} processed successfully.")    
         return df
 
     @classmethod
@@ -117,11 +107,8 @@ class ETLDataPipeline:
         logger.debug(f"Load files into google sheets, response={api_response}")
 
     @classmethod
-    def run_(self, target: list, data_layer: str) -> None:
+    def get_metadata(self, target: list, data_layer: str) -> None:
         self.metadata = self.read_metadata_from_drive(target=target, data_layer=data_layer)
-        (df, selected_file) = self.extract_(files=self.metadata, target=target)
-        self.transform_(dataframe=df, selected_file=selected_file)
-        logger.info(f"ETL process for {data_layer} files finished.")
 
 
 if __name__ == "__main__":
@@ -133,15 +120,31 @@ if __name__ == "__main__":
 
     pipeline.start_drive_service()
     pipeline.start_sheets_service()
+    # data_dict = pl.read_excel(source="data_dictionary/Diccionario_FBS.xlsx", sheet_name=target[0])
+    # primary_key_column = data_dict.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
 
+    # get db path from .env
+    db_path = os.getenv('DB_PATH')
+    with duckdb.connect(':memory:') as conn:
+        # Insert table into duckdb from read file
+        duckdb.sql("INSTALL spatial; LOAD spatial;", connection=conn)
+        conn.execute(f"CREATE SCHEMA IF NOT EXISTS temp;")
+        conn.execute(
+            f""" CREATE TABLE IF NOT EXISTS credit_data_dictionary AS 
+                        SELECT * 
+                        FROM st_read("data_dictionary/Diccionario_FBS.xlsx", layer='creditos');
+        """)
+        data_dictionary = duckdb.sql("""SELECT * FROM credit_data_dictionary;""", connection=conn)
+
+    # Run the ETL process for each layer
     for l in layers:
-        pipeline.run_(target=target, data_layer=l)
+        pipeline.get_metadata(target=target, data_layer=l)
+        (df, selected_file) = pipeline.extract_(files=pipeline.metadata, target=target)
+        pipeline.transform_(dataframe=df, selected_file=selected_file)
+        # format data types acording to data dict
+        raw_ = map_data_types(dictionary=data_dict["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['raw'])
 
-    data_dict = pl.read_excel(source="data_dictionary/Diccionario_FBS.xlsx", sheet_name=target[0])
-    primary_key_column = data_dict.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
-
-    # format data types acording to data dict
-    raw_ = map_data_types(dictionary=data_dict["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['raw'])
+    
     mod_ = map_data_types(dictionary=data_dict["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['modeled'])
 
     log_df = authlog_table(
