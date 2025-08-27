@@ -120,12 +120,12 @@ if __name__ == "__main__":
 
     pipeline.start_drive_service()
     pipeline.start_sheets_service()
-    # data_dict = pl.read_excel(source="data_dictionary/Diccionario_FBS.xlsx", sheet_name=target[0])
-    # primary_key_column = data_dict.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
+    data_dict = pl.read_excel(source="data_dictionary/Diccionario_FBS.xlsx", sheet_name=target[0])
+    primary_key_column = data_dict.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
 
     # get db path from .env
     db_path = os.getenv('DB_PATH')
-    with duckdb.connect(':memory:') as conn:
+    with duckdb.connect(database=db_path, read_only=False) as conn:
         # Insert table into duckdb from read file
         duckdb.sql("INSTALL spatial; LOAD spatial;", connection=conn)
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS temp;")
@@ -142,7 +142,7 @@ if __name__ == "__main__":
         (df, selected_file) = pipeline.extract_(files=pipeline.metadata, target=target)
         pipeline.transform_(dataframe=df, selected_file=selected_file)
         # format data types acording to data dict
-        raw_ = map_data_types(dictionary=data_dict["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['raw'])
+        raw_ = map_data_types(dictionary=data_dictionary["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['raw'])
 
     
     mod_ = map_data_types(dictionary=data_dict["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['modeled'])
