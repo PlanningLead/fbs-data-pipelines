@@ -12,71 +12,53 @@ class FBSTransformer:
 
     working_group_dict = {
         'TL': 'Tramite en línea',
-        'DDB': 'Direccion de desarrollo bienestar', 'GCIG': 'Grupo de control interno de gestión', 
-        'GGAFCC': 'Grupo de gestion admin Crédito y cartera', 'SDE': 'Subdirección de desarrollo y emprendimiento',
-        'GGC': 'Grupo de gestion de cesantias', 'GGEC': 'Grupo de gestion educativa y colegio',
-        'GGTHDO': 'Grupo de gestion de talento humano y desarrollo organizacional', 'DGC': 'Dirección de gestion corporativa',
-        'GER': 'Gerencia', 'GBRCD': 'Grupo de bienestar y recreación, cultura y deporte', 'GTICS': 'Grupo de tecnología, informacion y comunicaciones',
-        'GCMAIS': 'Grupo centro medico y atencion integral', 'OPL': 'Oficina de planeación', 'GSAGD': 'Grupo de seguimiento y atencion a gerencias dptales',
-        'GGF': 'Grupo de gestion financiera', 'GAJ': 'Grupo de asuntos juridicos', 'GGA': 'Grupo de gestion administrativa',
-        'SDBV': 'Subdirección de bienestar', 'GAUEGI': 'Grupo de atencion al usuario', 'OAD': 'Oficina de asuntos disciplinarios'
+        'DDB': 'Direccion de desarrollo bienestar', 
+        'GCIG': 'Grupo de control interno de gestión', 
+        'GGAFCC': 'Grupo de gestion admin Crédito y cartera', 
+        'SDE': 'Subdirección de desarrollo y emprendimiento',
+        'GGC': 'Grupo de gestion de cesantias', 
+        'GGEC': 'Grupo de gestion educativa y colegio',
+        'GGTHDO': 'Grupo de gestion de talento humano y desarrollo organizacional', 
+        'DGC': 'Dirección de gestion corporativa',
+        'GER': 'Gerencia', 'GBRCD': 'Grupo de bienestar y recreación, cultura y deporte', 
+        'GTICS': 'Grupo de tecnología, informacion y comunicaciones',
+        'GCMAIS': 'Grupo centro medico y atencion integral', 
+        'OPL': 'Oficina de planeación', 
+        'GSAGD': 'Grupo de seguimiento y atencion a gerencias dptales',
+        'GGF': 'Grupo de gestion financiera', 
+        'GAJ': 'Grupo de asuntos juridicos', 
+        'GGA': 'Grupo de gestion administrativa',
+        'SDBV': 'Subdirección de bienestar', 
+        'GAUEGI': 'Grupo de atencion al usuario', 
+        'OAD': 'Oficina de asuntos disciplinarios'
     }
 
     @classmethod
     def raw_creditos_(self, df: pl.DataFrame) -> None:    
-        """
-        Clean the DataFrame by converting date columns to datetime and creating an 'edad' column.
-        
-        Parameters:
-        df (DataFrame): The DataFrame to clean.
-        
-        Returns:
-        DataFrame: The cleaned DataFrame.
-        """
-        # Step 0: Delete the first row and rename columns
-        first_row = df[0]
-        df = df[1:]
-        
-        new_column_names = list(first_row.to_numpy()[0])
-        duplicates = [item for item, count in Counter(new_column_names).items() if count > 1]
-        # Check for duplicates in column names. When duplicates are found, add a suffix to the column name
-        if duplicates:
-            for duplicate in duplicates:
-                indices = [i for i, x in enumerate(new_column_names) if x == duplicate]
-                for i, index in enumerate(indices):
-                    new_column_names[index] = f"{duplicate}_{i+1}"
-        
-        df.columns = new_column_names
+        # Step 1: Delete columns where the word "duplicated" appears in the column name
+        logger.debug("Step 0 -- Removing duplicated columns")
+        df = df.select([col for col in df.columns if "duplicated" not in col])
 
-        # Step 1: Convert interests into numeric
+        # Step 2: Convert interests into numeric
         logger.debug("Step 1 -- Converting interest rates to numeric format")
-        intereses = df['TasaInterés'].str.replace('%', '')
-        temp_intereses = []
-        for tax in intereses:
-            if len(tax) == 6:
-                tax = float(tax)/10000000
-            elif len(tax) == 5:
-                tax = float(tax)/1000000
-            elif len(tax) == 7:
-                tax = float(tax)/10000000
-            temp_intereses.append(tax)
-        
-        df = df.with_columns(pl.Series(temp_intereses, strict=False).alias('TasaInterés'))
+        df = df.with_columns(
+            (
+                pl.col('TasaInterés')
+                .str.replace(r'\s*%', '') # Elimina el '%' y cualquier espacio antes de él
+                .cast(pl.Float64)         # Convierte el string a float
+                / 100                     # Divide por 100 para obtener el decimal
+            ).alias('TasaInterés') # Renombra la columna resultante al nombre original
+        )
 
-        # Step 2: Convert dates to correct format
+        # Step 3: Convert dates to correct format
         logger.debug("Step 2 -- Converting date columns to datetime format")
         date_columns = ['FechaIngreso', 'FechaSolicitud', 'Fecha Acta Aprobación', 'FechaGiro', 'FechaInicio', 'FechaLegalización', 'VencimientoCuota']
 
         df = df.with_columns(
-            pl.col(date_columns[0]).str.to_date().alias(date_columns[0]),
-            pl.col(date_columns[1]).str.to_date().alias(date_columns[1]),
-            pl.col(date_columns[2]).str.to_date().alias(date_columns[2]),
-            pl.col(date_columns[3]).str.to_date().alias(date_columns[3]),
-            pl.col(date_columns[4]).str.to_date().alias(date_columns[4]),
-            pl.col(date_columns[5]).str.to_date().alias(date_columns[5]),
-            pl.col(date_columns[6]).str.to_date().alias(date_columns[6])
+            pl.col(date_columns).str.to_date(format="%d/%m/%y")
         )
-        # Step 3: Create 'tiempos' columns
+
+        # Step 4: Create 'tiempos' columns
         logger.debug("Step 3 -- Creating time difference columns")
         df = df.with_columns(
             (pl.col('FechaGiro') - pl.col('FechaSolicitud')).dt.total_days().alias('tiempo_solicitud_giro').cast(pl.Int64),
@@ -104,12 +86,10 @@ class FBSTransformer:
         )
 
         # Step 6. Cambiar los separadores en el Monto de , a .
+        logger.debug("Step 6 -- Standardizing monetary value formats")
+        cols = ["Monto", "Monto Aprobado", "Saldo"] #, "Monto Solicitado"
         df = df.with_columns(
-            pl.col("Monto").str.replace_all(",", ".").cast(pl.Float64),
-            pl.col("Monto Aprobado").str.replace_all(",", ".").cast(pl.Float64),
-            pl.col("Saldo").str.replace_all(",", ".").cast(pl.Float64),
-            pl.col("ValorCuota").str.replace_all(",", ".").cast(pl.Float64),
-            # pl.col("Monto Solicitado").str.replace_all(",", "."),
+            pl.col(cols).str.replace_all(",", ".").cast(pl.Float64)
         )
         return df
 
@@ -156,21 +136,7 @@ class FBSTransformer:
     @staticmethod
     def modeled_creditos_(df):
         df = df.with_columns(
-            pl.when(pl.col("Monto") == "").then(pl.lit("0.0"))                          # Si es vacío, lo reemplaza
-                .otherwise(pl.col("Monto"))                                     # Si no, deja el valor original
-                .alias("Monto"),
-            pl.when(pl.col("Monto Aprobado") == "").then(pl.lit("0.0"))                         # Si es vacío, lo reemplaza
-                .otherwise(pl.col("Monto Aprobado"))                                    # Si no, deja el valor original
-                .alias("Monto Aprobado"),
-            pl.when(pl.col("Saldo") == "").then(pl.lit("0.0"))                         # Si es vacío, lo reemplaza
-                .otherwise(pl.col("Saldo"))                                    # Si no, deja el valor original
-                .alias("Saldo"),
-            pl.when(pl.col("ValorCuota") == "").then(pl.lit("0.0"))                         # Si es vacío, lo reemplaza
-                .otherwise(pl.col("ValorCuota"))                                    # Si no, deja el valor original
-                .alias("ValorCuota"),
-        )
-        df = df.with_columns(
-                pl.when(pl.all() == "").then(None).otherwise(pl.all())
+            pl.all().replace({"": None})
         )
         return df
 

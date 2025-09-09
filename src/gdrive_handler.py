@@ -1,7 +1,7 @@
 # Retrieve data from google drive and load it into a polars dataframe
 import polars as pl
-import duckdb
-import io, os.path
+import tempfile
+import io, os
 from googleapiclient.http import MediaIoBaseDownload
 from loguru import logger
 import pickle
@@ -10,6 +10,7 @@ from googleapiclient.discovery import build
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 import urllib.parse
+from src.db_manager import db_admin
 
 
 # Solo lectura de metadatos
@@ -215,17 +216,14 @@ def read_metadata(service, target_drive_name: str=None, target_parents: list=[],
     return files_dict
 
 
-def download_csv_into_duckdb(service, file_id, file_name, is_shared_drive=False) -> tuple[str, object]:
+def download_csv_into_polars(service, file_id, file_name, is_shared_drive=False, data_layer: str=None) -> str:
+    
     try:
-        # Request para descargar el archivo.
-        # supportsAllDrives es crucial si el archivo está en una Unidad Compartida.
         request = service.files().get_media(
             fileId=file_id,
             supportsAllDrives=is_shared_drive
         )
 
-        # Objeto para manejar la descarga en chunks.
-        # Create the BytesIO object that will receive the downloaded data
         download_buffer = io.BytesIO()
         downloader = MediaIoBaseDownload(download_buffer, request)
         done = False
@@ -234,33 +232,33 @@ def download_csv_into_duckdb(service, file_id, file_name, is_shared_drive=False)
             status, done = downloader.next_chunk()
         
         mb_value =  download_buffer.tell() / (1024 * 1024)
-        logger.warning(f"File {file_name} with id:'{file_id}' / download progress: {int(status.progress() * 100)}%")
+        logger.warning(f"File {file_name} from {data_layer}' downloaded {int(status.progress() * 100)}%, file Memory size: {round(mb_value, 3)} megabytes (Mb).")
         
         if mb_value > 10:
-            logger.warning(f"File Memory size: {round(mb_value, 3)} megabytes (Mb).")
+            logger.warning(f"File Memory is very big: {round(mb_value, 3)} megabytes (Mb).")
 
         raw_bytes_content = download_buffer.getvalue() 
 
         polars_buffer = io.BytesIO(raw_bytes_content)
-        polars_buffer.seek(0)  # Reset the buffer position to the beginning
+        polars_buffer.seek(0) # Reset the buffer position to the beginning
 
-        # Use duckdb to read the CSV content from the BytesIO object
-        with duckdb.connect(':memory:') as conn:
-            raw_tbl = duckdb.read_csv(polars_buffer, sep=",", connection=conn)
-            table_name = f"raw_{file_name}"
-            query = f'CREATE TABLE {table_name} AS SELECT * FROM {raw_tbl}'
-            data_table = conn.sql(query)
-
-        # Read the content directly from the new BytesIO object with pandas
-        return (table_name, data_table)
+        # Read the content directly from the new BytesIO object with polars
+        first_row = 1 if file_name == 'creditos' else 0
+        df = pl.read_csv(
+                polars_buffer,
+                separator=';',
+                encoding='latin1',
+                skip_rows=first_row,
+                truncate_ragged_lines=True
+            )
+        return df
 
     except Exception as e:
         logger.error(f"Error al descargar el archivo '{file_id}': {e}")
-        return (None, None)
+        return ""
 
 
 if __name__ == '__main__':
     # Get the Google Drive service
     creds = get_gdrive_credentials_for_institutional_account()
     service = get_drive_service(creds=creds)
-

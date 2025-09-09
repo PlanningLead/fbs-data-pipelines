@@ -78,17 +78,7 @@ def get_sheets_service(creds=None):
         return build('sheets', 'v4', credentials=creds)
 
 
-def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: str):
-    """
-    Lee datos de un rango específico de una Google Sheet y los devuelve como un DataFrame de pandas.
-
-    Args:
-        spreadsheet_id (str): El ID de la hoja de cálculo de Google.
-        range_name (str): El rango de celdas a leer (ej., 'Sheet1!A1:C10', 'Datos!A:A').
-    Returns:
-        pd.DataFrame: Un DataFrame de pandas con los datos, o None si hay un error o no hay datos.
-    """
-
+def download_sheets_into_df(service: object, spreadsheet_id: str, range_name: str, data_layer: str=None) -> pl.DataFrame:
     try:
         # Llama a la API para obtener los valores del rango especificado
         result = service.spreadsheets().values().get(
@@ -101,6 +91,7 @@ def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: 
 
         values = result.get('values', [])
 
+        # Create a data validation
         if not values:
             logger.warning(f"No se encontraron datos en el rango '{range_name}' de la hoja '{spreadsheet_id}'.")
             return pl.DataFrame() # Devuelve un DataFrame vacío
@@ -116,13 +107,13 @@ def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: 
         if shape_match_rate < 1:
             data = column_row_shape_match(headers=headers, data=data)
         
-        # Crea el DataFrame de pandas
+        # Crear la tabla en memoria usando duckdb
         df = pl.DataFrame(data, schema=headers, nan_to_null=True, orient='row')
-        logger.debug(f"Datos leídos con éxito. Dimensiones del DataFrame: {df.shape}")
         return df
 
     except Exception as e:
-        raise(f"Error al leer datos de la hoja de cálculo '{spreadsheet_id}' en el rango '{range_name}': {e}")
+        logger.error(f"Error reading the spreadsheet '{spreadsheet_id}': {e}")
+        return pl.DataFrame()
 
 
 def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='Sheet1', start_cell='A1', clear_existing=True) -> dict:
