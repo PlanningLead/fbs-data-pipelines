@@ -132,5 +132,5 @@ if __name__ == "__main__":
     target_meta = pipeline.get_files_metadata(target_name=target[0])
     
     pipeline.load_(df=output_df, spreadsheet_id=target_meta['id'])
-    pipeline.load_(df=log_df, spreadsheet_id=auth_meta['id'])
+    # pipeline.load_(df=log_df, spreadsheet_id=auth_meta['id'])
     logger.info("ETL Process finished...")

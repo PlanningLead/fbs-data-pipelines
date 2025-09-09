@@ -206,3 +206,4 @@ google_credentials.json
 
 # 3. Database files
 *.db
+*.duckdb
