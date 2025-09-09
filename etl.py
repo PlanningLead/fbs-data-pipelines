@@ -2,22 +2,16 @@
 from loguru import logger
 import polars as pl
 import pandas as pd
-import os
-import duckdb
 from src.transformation_layer import transformer
 from src.extraction_layer import extractor
-
-from src.gdrive_handler import (
-    get_drive_service, 
-    read_metadata, 
-    get_gdrive_credentials_for_institutional_account
+from src.gdrive_handler import read_metadata
+from src.gsheets_handler import write_dataframe_to_sheet
+from src.db_manager import db_admin
+from src.log_handler import (
+    authlog_table, 
+    get_table_updated, 
+    map_data_types
 )
-from src.gsheets_handler import (
-    get_gsheets_credentials_for_institutional_account,
-    get_sheets_service,
-    write_dataframe_to_sheet
-)
-from src.log_handler import authlog_table, get_table_updated, map_data_types
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -39,20 +33,10 @@ class ETLDataPipeline:
         return [d for d in self.metadata['all']['files'] if d['name'] == target_name][0]
 
     @classmethod
-    def start_drive_service(self) -> None:
-        creds = get_gdrive_credentials_for_institutional_account()
-        self.drive_service = get_drive_service(creds=creds)
-        
-    @classmethod
-    def start_sheets_service(self) -> None:
-        creds = get_gsheets_credentials_for_institutional_account()
-        self.sheets_service = get_sheets_service(creds=creds)
-
-    @classmethod
     def read_metadata_from_drive(self, target: list, data_layer: str) -> dict:
         self.current_layer = data_layer
         return read_metadata(
-            service=self.drive_service,
+            service=extractor.drive_service,
             target_drive_name='Planeacion',  
             target_parents=['3 Datos', self.layers[data_layer], None],
             target_folders=target,
@@ -60,45 +44,43 @@ class ETLDataPipeline:
         )
 
     @classmethod
-    def extract_(self, files: dict=None, target: str=None) -> tuple:
-        df = pl.DataFrame()
+    def extract_(self, files: dict=None, target: str=None) -> None:
         method_name = f"{self.current_layer}_data_extraction"
-        method_to_call = getattr(transformer, method_name, None)
+        method_to_call = getattr(extractor, method_name, None)
 
         try:
-            pass
-        except:
-            pass
-        
-        logger.info(f"Extract: {self.current_layer} file {selected_file['name']} processed succesfully")
-        return (df, selected_file)
+            self.df, self.selected_file = method_to_call(files=files, layer=self.current_layer, target=target)
+        except Exception as e:
+            self.df, self.selected_file = None, None
+            logger.error(f"Target '{target[0]}' not recognized for extraction. Method or subject doesn't exist. Error: {e}")
 
-    # Transform data
+        logger.info(f"Extract: {self.current_layer} file {self.selected_file['name']} saved into polars dataframe {self.df.shape}")
+
     @classmethod
-    def transform_(self, dataframe: object, selected_file: dict) -> None:
+    def transform_(self) -> None:
         # Transform the data
-        clean_name = selected_file['name']
+        clean_name = self.selected_file['name']
 
         if self.current_layer == 'raw':
-            if len(selected_file['name'].split("_")) > 1:
-                clean_name = selected_file['name'].split("_")[1].split(".")[0]
+            if len(self.selected_file['name'].split("_")) > 1:
+                clean_name = self.selected_file['name'].split("_")[1].split(".")[0]
 
         method_name = f"{self.current_layer}_{clean_name}_"
-
         method_to_call = getattr(transformer, method_name, None)
 
         try:
-            df = method_to_call(dataframe)
+            df = method_to_call(self.df)
         except Exception as e:
             logger.error(f"Target '{clean_name}' not recognized for transformation. Method or subject doesn't exist. Error: {e}")
         
-        logger.info(f"Transform: {self.current_layer} data from {clean_name} processed successfully.")    
-        return df
+        logger.info(f"Transform: {self.current_layer} data from {self.selected_file['name']} processed successfully.")    
+        db_admin.create_duckdb_table_from_dataframe(data=df, table_name=f"{self.current_layer}_{clean_name}")
+        self.output[self.current_layer] = df
 
     @classmethod
     def load_(self, df: pl.DataFrame, spreadsheet_id: str) -> None:
         api_response = write_dataframe_to_sheet(
-            service=self.sheets_service,
+            service=extractor.sheets_service,
             dataframe=df, 
             spreadsheet_id=spreadsheet_id,
             sheet_name="Hoja 1",
@@ -118,42 +100,28 @@ if __name__ == "__main__":
     target = ['creditos']
     layers = ['raw', 'modeled']
 
-    pipeline.start_drive_service()
-    pipeline.start_sheets_service()
-    data_dict = pl.read_excel(source="data_dictionary/Diccionario_FBS.xlsx", sheet_name=target[0])
-    primary_key_column = data_dict.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
-
-    # get db path from .env
-    db_path = os.getenv('DB_PATH')
-    with duckdb.connect(database=db_path, read_only=False) as conn:
-        # Insert table into duckdb from read file
-        duckdb.sql("INSTALL spatial; LOAD spatial;", connection=conn)
-        conn.execute(f"CREATE SCHEMA IF NOT EXISTS temp;")
-        conn.execute(
-            f""" CREATE TABLE IF NOT EXISTS credit_data_dictionary AS 
-                        SELECT * 
-                        FROM st_read("data_dictionary/Diccionario_FBS.xlsx", layer='creditos');
-        """)
-        data_dictionary = duckdb.sql("""SELECT * FROM credit_data_dictionary;""", connection=conn)
+    db_admin.create_duckdb_table_from_excel(
+        data_path="data_dictionary/Diccionario_FBS.xlsx", 
+        table_name="credit_data_dictionary", 
+        sheet_name=target[0]
+    )
+    data_dictionary = db_admin.get_polars_from_duckdb_table(table_name="credit_data_dictionary")
+    primary_key_column = data_dictionary.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
 
     # Run the ETL process for each layer
     for l in layers:
         pipeline.get_metadata(target=target, data_layer=l)
-        (df, selected_file) = pipeline.extract_(files=pipeline.metadata, target=target)
-        pipeline.transform_(dataframe=df, selected_file=selected_file)
-        # format data types acording to data dict
-        raw_ = map_data_types(dictionary=data_dictionary["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['raw'])
+        pipeline.extract_(files=pipeline.metadata, target=target)
+        pipeline.transform_()
 
-    
-    mod_ = map_data_types(dictionary=data_dict["Nombre_columna", "Tipo"], df=pipeline.get_ouptut()['modeled'])
-
-    log_df = authlog_table(
-        id_col=primary_key_column,
-        df_raw=pipeline.get_ouptut()['raw'], 
-        df_modeled=pipeline.get_ouptut()['modeled'], 
-        log_root=target[0],
-        target_cols= list(data_dict.filter(pl.col("Sujeto_auditoria") == 1)["Nombre_columna"])
-    )
+    # TODO: Separate log table creation from ETL process.
+    # log_df = authlog_table(
+    #     id_col=primary_key_column,
+    #     df_raw=pipeline.get_ouptut()['raw'], 
+    #     df_modeled=pipeline.get_ouptut()['modeled'], 
+    #     log_root=target[0],
+    #     target_cols= data_dictionary.filter(pl.col("Sujeto_auditoria") == 1)["Nombre_columna"]
+    # )
 
     output_df = get_table_updated(
         df_a=pipeline.get_ouptut()['modeled'], 
