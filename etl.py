@@ -29,13 +29,13 @@ class ETLDataPipeline:
         return self.output
     
     @classmethod
-    def get_files_metadata(self, target_name: str) -> dict:
+    def filter_files_metadata(self, target_name: str) -> dict:
         return [d for d in self.metadata['all']['files'] if d['name'] == target_name][0]
 
     @classmethod
-    def read_metadata_from_drive(self, target: list, data_layer: str) -> dict:
+    def get_metadata(self, target: list, data_layer: str) -> None:
         self.current_layer = data_layer
-        return read_metadata(
+        self.metadata = read_metadata(
             service=extractor.drive_service,
             target_drive_name='Planeacion',  
             target_parents=['3 Datos', self.layers[data_layer], None],
@@ -78,6 +78,11 @@ class ETLDataPipeline:
         self.output[self.current_layer] = df
 
     @classmethod
+    def consolidate_data(self) -> pl.DataFrame:
+        # Consolidate data using a mix between raw and modeled data
+        pass
+
+    @classmethod
     def load_(self, df: pl.DataFrame, spreadsheet_id: str) -> None:
         api_response = write_dataframe_to_sheet(
             service=extractor.sheets_service,
@@ -87,12 +92,8 @@ class ETLDataPipeline:
             clear_existing=True
         )
         logger.debug(f"Load files into google sheets, response={api_response}")
-
-    @classmethod
-    def get_metadata(self, target: list, data_layer: str) -> None:
-        self.metadata = self.read_metadata_from_drive(target=target, data_layer=data_layer)
-
-
+  
+# Main ETL process
 if __name__ == "__main__":
     logger.info("Starting ETL process...")
     pipeline = ETLDataPipeline()
@@ -100,12 +101,24 @@ if __name__ == "__main__":
     target = ['creditos']
     layers = ['raw', 'modeled']
 
-    db_admin.create_duckdb_table_from_excel(
-        data_path="data_dictionary/Diccionario_FBS.xlsx", 
-        table_name="credit_data_dictionary", 
-        sheet_name=target[0]
-    )
-    data_dictionary = db_admin.get_polars_from_duckdb_table(table_name="credit_data_dictionary")
+    # Check table list
+    dict_name = "credit_data_dictionary"
+    data_dictionary = pl.read_excel("data_dictionary/Diccionario_FBS.xlsx")
+
+    """
+    db_tables = db_admin.get_table_list()
+
+    if not (dict_name in db_tables):
+        db_admin.create_duckdb_table_from_excel(
+            data_path="data_dictionary/Diccionario_FBS.xlsx", 
+            table_name=dict_name, 
+            sheet_name=target[0]
+        )
+        data_dictionary = db_admin.get_polars_from_duckdb_table(table_name="credit_data_dictionary")
+    else:
+        data_dictionary = db_admin.get_polars_from_duckdb_table(table_name=dict_name)
+    """
+    
     primary_key_column = data_dictionary.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
 
     # Run the ETL process for each layer
@@ -114,6 +127,7 @@ if __name__ == "__main__":
         pipeline.extract_(files=pipeline.metadata, target=target)
         pipeline.transform_()
 
+    pipeline.consolidate_data()
     # TODO: Separate log table creation from ETL process.
     # log_df = authlog_table(
     #     id_col=primary_key_column,
@@ -128,8 +142,8 @@ if __name__ == "__main__":
         df_b=pipeline.get_ouptut()['raw']
     )
 
-    auth_meta = pipeline.get_files_metadata(target_name='auditoria')
-    target_meta = pipeline.get_files_metadata(target_name=target[0])
+    auth_meta = pipeline.filter_files_metadata(target_name='auditoria')
+    target_meta = pipeline.filter_files_metadata(target_name=target[0])
     
     pipeline.load_(df=output_df, spreadsheet_id=target_meta['id'])
     # pipeline.load_(df=log_df, spreadsheet_id=auth_meta['id'])

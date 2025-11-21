@@ -176,6 +176,62 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
         print(f"Error al escribir en la hoja de cálculo '{spreadsheet_id}': {e}")
         return None
 
+
+def download_sheets_into_polars(self, spreadsheet_id, file_name, is_shared_drive=False, data_layer: str=None) -> str:
+        
+    def data_padding(list_of_lists, headers):
+        # 1. Get the required number of columns from the header
+        num_columns = len(headers)
+        
+        # 2. Manually pad (or truncate) every row to match the header length
+        clean_rows = []
+        for row in list_of_lists:
+            row_len = len(row)
+            if row_len < num_columns:
+                # Row is too short: pad it with None
+                clean_rows.append(row + [None] * (num_columns - row_len))
+            elif row_len > num_columns:
+                # Row is too long: truncate it (common if extra data is in columns Z, AA, etc.)
+                clean_rows.append(row[:num_columns])
+            else:
+                # Row is the perfect length
+                clean_rows.append(row)
+        
+        return clean_rows
+
+    """Descarga una hoja de cálculo de Google Sheets y la convierte en un DataFrame de Polars."""    
+    try:
+        request = self.sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range='Hoja1'
+        ).execute()
+
+        values = request.get('values', [])
+        
+        if not values:
+            logger.warning(f"No data found in spreadsheet '{spreadsheet_id}'.")
+
+        # 1. The first list in 'values' is your header (column names)
+        headers = values[0]
+        
+        # 2. The rest of the lists are your data rows
+        data_rows = values[1:]
+        
+        # 3. Create the DataFrame
+        try:
+            df = pl.DataFrame(data_rows, schema=headers, orient="row")
+        except Exception as e:
+            logger.warning(f"Error creating DataFrame directly: {e}. Attempting to pad data.")
+            clean_data = data_padding(data_rows, headers)
+            df = pl.DataFrame(clean_data, schema=headers, orient="row")
+        logger.debug(f"Spreadsheet '{spreadsheet_id}' downloaded into Polars DataFrame successfully.")
+        return df
+
+    except Exception as e:
+        logger.error(f"Error working with spreadsheet '{spreadsheet_id}': {e}")
+        return None
+
+
 # --- Ejemplo de uso ---
 if __name__ == '__main__':
     print('Hola mundo')

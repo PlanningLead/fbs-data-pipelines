@@ -1,6 +1,7 @@
 # Retrieve data from google drive and load it into a polars dataframe
 import polars as pl
-import tempfile
+import csv
+from io import StringIO
 import io, os
 from googleapiclient.http import MediaIoBaseDownload
 from loguru import logger
@@ -257,7 +258,21 @@ def download_csv_into_polars(service, file_id, file_name, is_shared_drive=False,
         logger.error(f"Error al descargar el archivo '{file_id}': {e}")
         return ""
 
+def read_csv_from_drive(service, file_id) -> list:
+    # 1. Download the file content as text
+    # Note: We use drive_service (the v3 one), NOT sheets_service
+    response = service.files().get_media(fileId=file_id).execute()
+    
+    # The content comes as bytes, so we decode it to string
+    csv_content = response.decode('utf-8')
+    
+    # 2. Parse the string as a CSV
+    # This creates a list of lists, exactly like the Sheets API would
+    data = list(csv.reader(StringIO(csv_content)))
 
+    return data
+    
+    return data
 if __name__ == '__main__':
     # Get the Google Drive service
     creds = get_gdrive_credentials_for_institutional_account()

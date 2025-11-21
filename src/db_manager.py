@@ -12,17 +12,6 @@ class DBAdministrator:
     db_path = os.getenv('DB_PATH', ':memory:')
 
     def test_duckdb_connection(self) -> bool:
-        """
-        Tests the connection to a DuckDB database using a with statement.
-        
-        Args:
-            db_path: The file path to the DuckDB database. 
-                    Defaults to 'test_duckdb.db' for a file-based connection.
-
-        Returns:
-            True if the connection is successful, False otherwise.
-        """
-        # db_path = db_path if db_path else self.db_path
         try:
             # The 'with' statement automatically handles opening and closing the connection
             with duckdb.connect(self.db_path) as con:
@@ -50,7 +39,6 @@ class DBAdministrator:
             conn.execute(f'CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM data')
             logger.debug(f"Table '{table_name}' created with shape {data.shape}")
 
-
     @classmethod
     def create_duckdb_table_from_excel(self, data_path: str, table_name: str, sheet_name: str='Sheet1') -> None:
         
@@ -71,7 +59,6 @@ class DBAdministrator:
             table_ = duckdb.sql(query, connection=conn).to_df()
             logger.debug(f"Table '{table_name}' with {table_.shape} retrieved successfully.")
 
-
     @classmethod
     def get_polars_from_duckdb_table(self, table_name: str) -> None:
         with duckdb.connect(self.db_path) as conn:
@@ -79,6 +66,14 @@ class DBAdministrator:
             table_ = conn.sql(query).pl()
             logger.debug(f"Table '{table_name}' with {table_.shape} retrieved successfully.")
         return table_
+
+    @classmethod
+    def get_table_list(self) -> list:
+        with duckdb.connect(self.db_path) as conn:
+            tables = conn.execute("SHOW TABLES").fetchall()
+            table_list = [table[0] for table in tables]
+            logger.debug(f"Tables recorded={len(table_list)} in database - {table_list}")
+        return table_list
 
 # Initialize a DBManager instance for testing
 db_admin = DBAdministrator()
