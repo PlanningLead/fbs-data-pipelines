@@ -1,7 +1,7 @@
 import polars as pl
 from src.gdrive_handler import (
     download_csv_into_polars,
-    download_sheets_into_polars,
+    # download_sheets_into_df,
     get_gdrive_credentials_for_institutional_account,
     get_drive_service
 )
@@ -35,7 +35,7 @@ class FBSExtractor:
         files = sorted(files['files'], key=lambda x: x['createdTime'], reverse=True)
         selected_file = files[0] if files else None
 
-        df = download_sheets_into_polars(
+        df = download_csv_into_polars(
                 service=self.drive_service, 
                 file_id=selected_file['id'],
                 file_name=selected_file['name'].split("_")[-1].split(".")[0], 

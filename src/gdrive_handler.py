@@ -249,6 +249,7 @@ def download_csv_into_polars(service, file_id, file_name, is_shared_drive=False,
                 polars_buffer,
                 separator=';',
                 encoding='latin1',
+                ignore_errors=True,
                 skip_rows=first_row,
                 truncate_ragged_lines=True
             )
@@ -257,6 +258,7 @@ def download_csv_into_polars(service, file_id, file_name, is_shared_drive=False,
     except Exception as e:
         logger.error(f"Error al descargar el archivo '{file_id}': {e}")
         return ""
+
 
 def read_csv_from_drive(service, file_id) -> list:
     # 1. Download the file content as text
@@ -271,8 +273,49 @@ def read_csv_from_drive(service, file_id) -> list:
     data = list(csv.reader(StringIO(csv_content)))
 
     return data
-    
-    return data
+
+# def download_csv_into_duckdb(service, file_id, file_name, is_shared_drive=False) -> tuple[str, object]:
+#     try:
+#         # Request para descargar el archivo.
+#         # supportsAllDrives es crucial si el archivo está en una Unidad Compartida.
+#         request = service.files().get_media(
+#             fileId=file_id,
+#             supportsAllDrives=is_shared_drive
+#         )
+
+#         # Objeto para manejar la descarga en chunks.
+#         # Create the BytesIO object that will receive the downloaded data
+#         download_buffer = io.BytesIO()
+#         downloader = MediaIoBaseDownload(download_buffer, request)
+#         done = False
+
+#         while not done:
+#             status, done = downloader.next_chunk()
+        
+#         mb_value =  download_buffer.tell() / (1024 * 1024)
+#         logger.warning(f"File {file_name} with id:'{file_id}' / download progress: {int(status.progress() * 100)}%")
+        
+#         if mb_value > 10:
+#             logger.warning(f"File Memory size: {round(mb_value, 3)} megabytes (Mb).")
+
+#         raw_bytes_content = download_buffer.getvalue() 
+
+#         polars_buffer = io.BytesIO(raw_bytes_content)
+#         polars_buffer.seek(0)  # Reset the buffer position to the beginning
+
+#         # Use duckdb to read the CSV content from the BytesIO object
+#         with duckdb.connect(':memory:') as conn:
+#             raw_tbl = duckdb.read_csv(polars_buffer, sep=",", connection=conn)
+#             table_name = f"raw_{file_name}"
+#             query = f'CREATE TABLE {table_name} AS SELECT * FROM {raw_tbl}'
+#             data_table = conn.sql(query)
+
+#         # Read the content directly from the new BytesIO object with pandas
+#         return (table_name, data_table)
+
+#     except Exception as e:
+#         logger.error(f"Error al descargar el archivo '{file_id}': {e}")
+#         return (None, None)
 if __name__ == '__main__':
     # Get the Google Drive service
     creds = get_gdrive_credentials_for_institutional_account()
