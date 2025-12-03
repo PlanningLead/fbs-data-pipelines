@@ -50,12 +50,13 @@ class FBSTransformer:
             ).alias('TasaInterés') # Renombra la columna resultante al nombre original
         )
 
-        # Step 3: Convert dates to correct format
-        logger.debug("Step 2 -- Converting date columns to datetime format")
+        # Step 3: Convert dates to correct date format for operations in polars
+        logger.debug("Step 2 -- Converting date columns to datetime format for polars")
         date_columns = ['FechaIngreso', 'FechaSolicitud', 'Fecha Acta Aprobación', 'FechaGiro', 'FechaInicio', 'FechaLegalización', 'VencimientoCuota']
 
         df = df.with_columns(
-            pl.col(date_columns).str.to_date(format="%d/%m/%y")
+            pl.col(date_columns).
+            str.to_date(format="%d/%m/%y")
         )
 
         # Step 4: Create 'tiempos' columns
@@ -91,6 +92,13 @@ class FBSTransformer:
         df = df.with_columns(
             pl.col(cols).str.replace_all(",", ".").cast(pl.Float64)
         )
+
+        logger.debug("Step 7 -- Changing date format to avoid issues when exporting to other file types.")
+        df = df.with_columns(
+            pl.col(date_columns)
+            .dt.strftime("%d/%m/%Y")
+        )
+        
         return df
 
     @classmethod

@@ -29,8 +29,13 @@ class ETLDataPipeline:
         return self.output
     
     @classmethod
-    def filter_files_metadata(self, target_name: str) -> dict:
-        return [d for d in self.metadata['files'] if d['name'].split("_")[1].split(".")[0] == target_name][0]
+    def filter_files_metadata(self, target_name: str, layer: str) -> dict:
+        if layer == "raw":
+            return [d for d in self.metadata['files'] if d['name'].split("_")[1].split(".")[0] == target_name][0]
+        if layer == "modeled":
+            return [d for d in self.metadata['files'] if d['name'] == target_name][0]
+        else:
+            return {}
 
     @classmethod
     def get_metadata(self, target: list, data_layer: str) -> None:
@@ -107,7 +112,8 @@ if __name__ == "__main__":
         pipeline.extract_(files=pipeline.metadata, target=target)
         pipeline.transform_()
 
-    target_meta = pipeline.filter_files_metadata(target_name=target[0])    
+    pipeline.get_metadata(target=target, data_layer="modeled")
+    target_meta = pipeline.filter_files_metadata(target_name=target[0], layer="modeled")    
     
     pipeline.load_(df=pipeline.output["raw"], spreadsheet_id=target_meta['id'])
     logger.info("ETL Process finished...")

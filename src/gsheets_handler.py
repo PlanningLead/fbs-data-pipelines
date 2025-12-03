@@ -145,7 +145,7 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
     try:
         # 1. (Opcional) Borrar el contenido existente en el rango
         if clear_existing:
-            logger.debug(f"Limpiando rango '{range_name}' en la hoja '{spreadsheet_id}'...")
+            logger.debug(f"Clean range '{range_name}' in google sheet '{spreadsheet_id}'")
             clear_body = {} # Un cuerpo vacío significa borrar todo el rango
             request = service.spreadsheets().values().clear(
                 spreadsheetId=spreadsheet_id, 
