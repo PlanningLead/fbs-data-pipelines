@@ -140,7 +140,7 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
 
     # Definir el rango donde se escribirán los datos
     # Por ejemplo, si start_cell es 'A1' y sheet_name es 'Datos', el rango sería 'Datos!A1'
-    range_name = f"{sheet_name}!{start_cell}"
+    range_name = f"{sheet_name}"
 
     try:
         # 1. (Opcional) Borrar el contenido existente en el rango
@@ -153,7 +153,7 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
                 body=clear_body
             )
             response = request.execute()
-            logger.warning(f"Rango limpiado: {response.get('clearedRange')}")
+            logger.warning(f"Cleared range: {response.get('clearedRange')}")
 
         # 2. Escribir los nuevos datos
         body = {
@@ -169,11 +169,11 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
             body=body
         ).execute()
         
-        logger.debug(f"{result.get('updatedCells')} celdas actualizadas en la hoja '{sheet_name}'.")
+        logger.debug(f"{result.get('updatedCells')} updated cells in sheet '{sheet_name}'.")
         return result
 
     except Exception as e:
-        print(f"Error al escribir en la hoja de cálculo '{spreadsheet_id}': {e}")
+        print(f"Error writing spreadsheet '{spreadsheet_id}': {e}")
         return None
 
 

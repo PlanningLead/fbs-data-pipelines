@@ -71,7 +71,8 @@ class FBSTransformer:
         logger.debug("Step 4 -- Adding current date column")
         current_date = date.today()
         df = df.with_columns(
-            pl.lit(current_date).alias('fecha_actual')
+            pl.lit(current_date)
+            .alias('fecha_actual')
         )
 
         # Step 5: create variable 'tiempo_de_espera'. If 'fecha_giro' is null, do 'fecha_actual' - 'fecha_solicitud'. Finally, convert to days
@@ -94,6 +95,7 @@ class FBSTransformer:
         )
 
         logger.debug("Step 7 -- Changing date format to avoid issues when exporting to other file types.")
+        date_columns += ['fecha_actual']
         df = df.with_columns(
             pl.col(date_columns)
             .dt.strftime("%d/%m/%Y")

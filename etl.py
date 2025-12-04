@@ -91,7 +91,7 @@ class ETLDataPipeline:
             sheet_name="Hoja 1",
             clear_existing=True
         )
-        logger.debug(f"Load files into google sheets, response={api_response}")
+        logger.info(f"Load files into google sheets, response={api_response}")
   
 # Main ETL process
 if __name__ == "__main__":
