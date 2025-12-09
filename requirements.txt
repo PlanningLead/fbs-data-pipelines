@@ -1,7 +1,12 @@
 polars
+pandas
 virtualenv
 make
 google-api-python-client 
 google-auth-httplib2 
 google-auth-oauthlib
 loguru
+fastexcel
+fsspec
+duckdb
+python-dotenv

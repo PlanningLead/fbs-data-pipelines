@@ -65,7 +65,7 @@ def get_gsheets_credentials_for_institutional_account(token_path: str = 'credent
         logger_msg = f"Nuevas credenciales para Google Drive guardadas en {token_path}"
         with open(token_path, 'wb') as token:
             pickle.dump(creds, token)
-    logger.info(logger_msg)
+    logger.debug(logger_msg)
     # Retorna las credenciales
     return creds
 
@@ -78,17 +78,7 @@ def get_sheets_service(creds=None):
         return build('sheets', 'v4', credentials=creds)
 
 
-def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: str):
-    """
-    Lee datos de un rango específico de una Google Sheet y los devuelve como un DataFrame de pandas.
-
-    Args:
-        spreadsheet_id (str): El ID de la hoja de cálculo de Google.
-        range_name (str): El rango de celdas a leer (ej., 'Sheet1!A1:C10', 'Datos!A:A').
-    Returns:
-        pd.DataFrame: Un DataFrame de pandas con los datos, o None si hay un error o no hay datos.
-    """
-
+def download_sheets_into_df(service: object, spreadsheet_id: str, range_name: str, data_layer: str=None) -> pl.DataFrame:
     try:
         # Llama a la API para obtener los valores del rango especificado
         result = service.spreadsheets().values().get(
@@ -101,6 +91,7 @@ def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: 
 
         values = result.get('values', [])
 
+        # Create a data validation
         if not values:
             logger.warning(f"No se encontraron datos en el rango '{range_name}' de la hoja '{spreadsheet_id}'.")
             return pl.DataFrame() # Devuelve un DataFrame vacío
@@ -116,15 +107,14 @@ def download_data_from_sheets(service: object, spreadsheet_id: str, range_name: 
         if shape_match_rate < 1:
             data = column_row_shape_match(headers=headers, data=data)
         
-        # Crea el DataFrame de pandas
+        # Crear la tabla en memoria usando duckdb
         df = pl.DataFrame(data, schema=headers, nan_to_null=True, orient='row')
-        logger.debug(f"Datos leídos con éxito. Dimensiones del DataFrame: {df.shape}")
         return df
 
     except Exception as e:
-        logger.error(f"Error al leer datos de la hoja de cálculo '{spreadsheet_id}' en el rango '{range_name}': {e}")
-        return None
-    
+        logger.error(f"Error reading the spreadsheet '{spreadsheet_id}': {e}")
+        return pl.DataFrame()
+
 
 def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='Sheet1', start_cell='A1', clear_existing=True) -> dict:
     """
@@ -150,12 +140,12 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
 
     # Definir el rango donde se escribirán los datos
     # Por ejemplo, si start_cell es 'A1' y sheet_name es 'Datos', el rango sería 'Datos!A1'
-    range_name = f"{sheet_name}!{start_cell}"
+    range_name = f"{sheet_name}"
 
     try:
         # 1. (Opcional) Borrar el contenido existente en el rango
         if clear_existing:
-            logger.debug(f"Limpiando rango '{range_name}' en la hoja '{spreadsheet_id}'...")
+            logger.debug(f"Clean range '{range_name}' in google sheet '{spreadsheet_id}'")
             clear_body = {} # Un cuerpo vacío significa borrar todo el rango
             request = service.spreadsheets().values().clear(
                 spreadsheetId=spreadsheet_id, 
@@ -163,7 +153,7 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
                 body=clear_body
             )
             response = request.execute()
-            logger.warning(f"Rango limpiado: {response.get('clearedRange')}")
+            logger.warning(f"Cleared range: {response.get('clearedRange')}")
 
         # 2. Escribir los nuevos datos
         body = {
@@ -179,12 +169,68 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
             body=body
         ).execute()
         
-        logger.debug(f"{result.get('updatedCells')} celdas actualizadas en la hoja '{sheet_name}'.")
+        logger.debug(f"{result.get('updatedCells')} updated cells in sheet '{sheet_name}'.")
         return result
 
     except Exception as e:
-        print(f"Error al escribir en la hoja de cálculo '{spreadsheet_id}': {e}")
+        print(f"Error writing spreadsheet '{spreadsheet_id}': {e}")
         return None
+
+
+def download_sheets_into_polars(self, spreadsheet_id, file_name, is_shared_drive=False, data_layer: str=None) -> str:
+        
+    def data_padding(list_of_lists, headers):
+        # 1. Get the required number of columns from the header
+        num_columns = len(headers)
+        
+        # 2. Manually pad (or truncate) every row to match the header length
+        clean_rows = []
+        for row in list_of_lists:
+            row_len = len(row)
+            if row_len < num_columns:
+                # Row is too short: pad it with None
+                clean_rows.append(row + [None] * (num_columns - row_len))
+            elif row_len > num_columns:
+                # Row is too long: truncate it (common if extra data is in columns Z, AA, etc.)
+                clean_rows.append(row[:num_columns])
+            else:
+                # Row is the perfect length
+                clean_rows.append(row)
+        
+        return clean_rows
+
+    """Descarga una hoja de cálculo de Google Sheets y la convierte en un DataFrame de Polars."""    
+    try:
+        request = self.sheets_service.spreadsheets().values().get(
+            spreadsheetId=spreadsheet_id,
+            range='Hoja1'
+        ).execute()
+
+        values = request.get('values', [])
+        
+        if not values:
+            logger.warning(f"No data found in spreadsheet '{spreadsheet_id}'.")
+
+        # 1. The first list in 'values' is your header (column names)
+        headers = values[0]
+        
+        # 2. The rest of the lists are your data rows
+        data_rows = values[1:]
+        
+        # 3. Create the DataFrame
+        try:
+            df = pl.DataFrame(data_rows, schema=headers, orient="row")
+        except Exception as e:
+            logger.warning(f"Error creating DataFrame directly: {e}. Attempting to pad data.")
+            clean_data = data_padding(data_rows, headers)
+            df = pl.DataFrame(clean_data, schema=headers, orient="row")
+        logger.debug(f"Spreadsheet '{spreadsheet_id}' downloaded into Polars DataFrame successfully.")
+        return df
+
+    except Exception as e:
+        logger.error(f"Error working with spreadsheet '{spreadsheet_id}': {e}")
+        return None
+
 
 # --- Ejemplo de uso ---
 if __name__ == '__main__':

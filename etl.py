@@ -1,165 +1,138 @@
+# Import libraries
 from loguru import logger
-from src.transformation_ import FBSPreprocessing
-from datetime import datetime
 import polars as pl
-from src.gdrive_handler import (
-    get_drive_service, 
-    read_metadata, 
-    download_csv_into_dataframe, 
-    get_gdrive_credentials_for_institutional_account
+import pandas as pd
+from src.transformation_layer import transformer
+from src.extraction_layer import extractor
+from src.gdrive_handler import read_metadata
+from src.gsheets_handler import write_dataframe_to_sheet
+# from src.db_manager import db_admin
+from src.log_handler import (
+    authlog_table, 
+    get_table_updated, 
+    map_data_types
 )
-from src.gsheets_handler import (
-    get_gsheets_credentials_for_institutional_account,
-    get_sheets_service,
-    download_data_from_sheets,
-    write_dataframe_to_sheet
-)
-from src.log_handler import authlog_table, get_table_updated
+from dotenv import load_dotenv
 
 
+# Load environment variables
+load_dotenv()
+
+# Create object to handle the ETL process
 class ETLDataPipeline:
-
-    validation = {'file_a': None, 'file_b': None}
+    
+    output = {}
     layers = {'raw': 'crudos', 'modeled': 'modelados'}
 
     @classmethod
-    def start_drive_service(self) -> None:
-        creds = get_gdrive_credentials_for_institutional_account()
-        self.drive_service = get_drive_service(creds=creds)
-        
+    def get_ouptut(self) -> dict:
+        return self.output
+    
     @classmethod
-    def start_sheets_service(self) -> None:
-        creds = get_gsheets_credentials_for_institutional_account()
-        self.sheets_service = get_sheets_service(creds=creds)
+    def filter_files_metadata(self, target_name: str, layer: str) -> dict:
+        if layer == "raw":
+            return [d for d in self.metadata['files'] if d['name'].split("_")[1].split(".")[0] == target_name][0]
+        if layer == "modeled":
+            return [d for d in self.metadata['files'] if d['name'] == target_name][0]
+        else:
+            return {}
 
     @classmethod
-    def read_metadata_from_drive(self, target: list, data_layer: str) -> dict:
-        
+    def get_metadata(self, target: list, data_layer: str) -> None:
         self.current_layer = data_layer
-
-        return read_metadata(
-            service=self.drive_service,
+        self.metadata = read_metadata(
+            service=extractor.drive_service,
             target_drive_name='Planeacion',  
             target_parents=['3 Datos', self.layers[data_layer], None],
             target_folders=target,
             data_layer=self.current_layer,
         )
 
-    # Add upload date for each file
-    @staticmethod
-    def adjust_date_format(date_string, format_string):
-        return datetime.strptime(date_string, format_string)
-
-    # sort data by date
-    @staticmethod
-    def sort_and_get_most_recent(files):
-        files = sorted(files['radicados']['files'], key=lambda x: x['createdTime'], reverse=True)
-        selected_file = files[0] if files else None
-        return selected_file
-
-    # Extract data
     @classmethod
-    def extract_(self, files: dict=None, target: str=None) -> tuple:
-        df = pl.DataFrame()
-        if self.current_layer == 'raw':
-            selected_file = self.sort_and_get_most_recent(files)
-            logger.debug(f"Found raw file: {selected_file['name']} with ID: {selected_file['id']}")
-            df = download_csv_into_dataframe(
-                service=self.drive_service, 
-                file_id=selected_file['id'], 
-                is_shared_drive=True
-            )
-        elif self.current_layer == 'modeled':
-            # select the file where the object name is the same as the target
-            selected_file = [f for f in files['all']['files'] if f['name'] == target[0]][0]
+    def extract_(self, files: dict=None, target: str=None) -> None:
+        method_name = f"{self.current_layer}_data_extraction"
+        method_to_call = getattr(extractor, method_name, None)
 
-            df = download_data_from_sheets(
-                service=self.sheets_service, 
-                spreadsheet_id=selected_file['id'],
-                range_name='Hoja 1'
-            )
+        try:
+            self.df, self.selected_file = method_to_call(files=files, layer=self.current_layer, target=target)
+        except Exception as e:
+            self.df, self.selected_file = None, None
+            logger.error(f"Target '{target[0]}' not recognized for extraction. Method or subject doesn't exist. Error: {e}")
 
-        return (df, selected_file)
+        logger.info(f"Extract: {self.current_layer} file {self.selected_file['name']} saved into polars dataframe {self.df.shape}")
 
-    # Transform data
     @classmethod
-    def transform_(self, dataframe: object, selected_file: dict) -> None:
+    def transform_(self) -> None:
         # Transform the data
+        clean_name = self.selected_file['name']
+
         if self.current_layer == 'raw':
-            clean_name = selected_file['name']
-            if len(selected_file['name'].split("_")) > 1:
-                clean_name = selected_file['name'].split("_")[1].split(".")[0]
+            if len(self.selected_file['name'].split("_")) > 1:
+                clean_name = self.selected_file['name'].split("_")[1].split(".")[0]
 
-            output_df = self.preprocessing_(input_df=dataframe, subject=clean_name)
-            self.validation['file_a'] = output_df
-            logger.debug("Raw data extracted & transformed successfully.")
+        method_name = f"{self.current_layer}_{clean_name}_"
+        method_to_call = getattr(transformer, method_name, None)
+
+        try:
+            df = method_to_call(self.df)
+        except Exception as e:
+            logger.error(f"Target '{clean_name}' not recognized for transformation. Method or subject doesn't exist. Error: {e}")
         
-        elif self.current_layer == 'modeled':
-            dataframe = dataframe.with_columns(
-                pl.col('Radicado').cast(pl.Int64),
-                pl.col('Rpta').cast(pl.Int64)
-            )
-            self.validation['file_b'] = dataframe
-            output_df = dataframe
-
-        return output_df
-
-    @staticmethod
-    def preprocessing_(input_df: pl.DataFrame, subject: str) -> pl.DataFrame:
-        preprocessing = FBSPreprocessing()
-        
-        if subject == 'credito':
-            df = preprocessing.credit_preprocessing(input_df)
-        elif subject == 'radicados':
-            df = preprocessing.radicacion_preprocessing(input_df)
-        else:
-            logger.error(f"Target '{subject}' not recognized for transformation.")
-        return df
+        logger.info(f"Transform: {self.current_layer} data from {self.selected_file['name']} processed successfully.")    
+        # db_admin.create_duckdb_table_from_dataframe(data=df, table_name=f"{self.current_layer}_{clean_name}")
+        self.output[self.current_layer] = df
 
     @classmethod
     def load_(self, df: pl.DataFrame, spreadsheet_id: str) -> None:
         api_response = write_dataframe_to_sheet(
-            service=self.sheets_service,
+            service=extractor.sheets_service,
             dataframe=df, 
             spreadsheet_id=spreadsheet_id,
             sheet_name="Hoja 1",
             clear_existing=True
         )
-        logger.debug(f"Load files into google sheets, response={api_response}")
-
-
+        logger.info(f"Load files into google sheets, response={api_response}")
+  
+# Main ETL process
 if __name__ == "__main__":
     logger.info("Starting ETL process...")
-    # target_folders = ['credito', 'radicados', 'funcionariosCGR']
     pipeline = ETLDataPipeline()
 
-    # Extract data from Google Drive
-    group = ['radicados']
-    layers = ['raw', 'modeled']
+    target = ['creditos']
+    layers = ['raw']
 
-    # Extract data for raw files
-    pipeline.start_drive_service()
-    logger.info(f"ETL process for raw files in folder '{group[0]}'")
-    raw_metadata = pipeline.read_metadata_from_drive(target=group, data_layer=layers[0])
-    df, extracted_file = pipeline.extract_(files=raw_metadata)
-    raw_file = pipeline.transform_(df, selected_file=extracted_file)
+    # Check table list
+    dict_name = "credit_data_dictionary"
+    data_dictionary = pl.read_excel("data_dictionary/Diccionario_FBS.xlsx")    
+    primary_key_column = data_dictionary.filter(pl.col("Jerarquia") == 'PK')["Nombre_columna"][0]
 
-    # Extract data for modeled files
-    pipeline.start_sheets_service()
-    logger.info(f"ETL process for modeled files in file '{group[0]}'")
-    modeled_metadata = pipeline.read_metadata_from_drive(target=[None], data_layer=layers[1])
-    df, extracted_file = pipeline.extract_(files=modeled_metadata, target=[group[0]])
-    modeled_file = pipeline.transform_(dataframe=df, selected_file=extracted_file)
+    # Run the ETL process for each layer
+    for l in layers:
+        pipeline.get_metadata(target=target, data_layer=l)
+        pipeline.extract_(files=pipeline.metadata, target=target)
+        pipeline.transform_()
 
-    # TODO: Generate a log for changes between raw transformed and modeled files
-    log_df = authlog_table(df_a=modeled_file, df_b=raw_file, log_root=group[0])
-    # TODO: Load resulting dataframe into modeled sheets. Save modeled metadata ID.
-    output_df = get_table_updated(df_a=modeled_file, df_b=raw_file)
-
-    # TODO: Write new data into sheets (Group and auth)
-    audit_id = [d for d in modeled_metadata['all']['files'] if d['name'] == 'auditoria'][0]['id']
-    target_id = [d for d in modeled_metadata['all']['files'] if d['name'] == group[0]][0]['id']
+    pipeline.get_metadata(target=target, data_layer="modeled")
+    target_meta = pipeline.filter_files_metadata(target_name=target[0], layer="modeled")    
     
-    pipeline.load_(df=output_df, spreadsheet_id=target_id)
-    pipeline.load_(df=log_df, spreadsheet_id=audit_id)
+    pipeline.load_(df=pipeline.output["raw"], spreadsheet_id=target_meta['id'])
     logger.info("ETL Process finished...")
+
+
+
+
+
+    # ------------------------
+
+    # db_tables = db_admin.get_table_list()
+
+    # if not (dict_name in db_tables):
+    #     db_admin.create_duckdb_table_from_excel(
+    #         data_path="data_dictionary/Diccionario_FBS.xlsx", 
+    #         table_name=dict_name, 
+    #         sheet_name=target[0]
+    #     )
+    #     data_dictionary = db_admin.get_polars_from_duckdb_table(table_name="credit_data_dictionary")
+    # else:
+    #     data_dictionary = db_admin.get_polars_from_duckdb_table(table_name=dict_name)
+

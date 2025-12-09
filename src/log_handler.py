@@ -1,30 +1,66 @@
 import polars as pl
-from datetime import datetime
+from datetime import datetime, date
 import uuid
+from loguru import logger
 
 
-def authlog_table(df_a, df_b, log_root: str):
-    # ----------------- Proceso de Detección -----------------
-    # 1. Realizar una unión externa (outer join), esto nos permite comparar filas que existen en ambos y detectar las que faltan.
-    id_col = 'Radicado'
-    
-    joined_df = df_a.join(df_b, on=id_col, how='outer', suffix='_b')
+def map_data_types(dictionary, df):
+    type_map = {
+        "Integer": pl.Int64,
+        "String": pl.String,
+        "Timestamp": pl.Datetime,
+        "Float": pl.Float64,
+        "Bool": pl.String
+        # Puedes añadir más tipos de datos aquí según lo necesites
+    }
 
-    # 2. Identificar los registros que han sido modificados, agregados o eliminados.
-    target_cols = ['Rpta', 'funcionario_destino']
+    tipos_en_string = {dictionary[i]["Nombre_columna"][0]: dictionary[i]["Tipo"][0] for i in range(dictionary.shape[0])}
+
+    expresiones_de_cast = []
+    for col, dtype_str in tipos_en_string.items():
+        if col in df.columns:
+            if dtype_str != "Timestamp":
+                # Si la columna existe, creamos la expresión de cast y la agregamos a la lista
+                expresion = pl.col(col).cast(type_map[dtype_str])
+                expresiones_de_cast.append(expresion)
+            else:
+                # check if element is string or not
+                if not isinstance(df[col].to_list()[0], date):
+                    expresion = pl.col(col).str.strptime(type_map[dtype_str], format="%d/%m/%Y")
+                    expresiones_de_cast.append(expresion)
+                else:
+                    expresion = pl.col(col).cast(type_map[dtype_str])
+                    expresiones_de_cast.append(expresion)
+        else:
+            # Si la columna no existe, la omitimos y puedes imprimir un mensaje
+            logger.warning(f"⚠️ Aviso: La columna '{col}' no se encontró y se omitirá del proceso de cast.")
+
+    # 4. Aplicar los casts a las columnas que existen
+    df_casteado = df.with_columns(expresiones_de_cast)
+    return df_casteado
+
+
+def authlog_table(df_raw, df_modeled, log_root: str, id_col: str, target_cols: list):
+    # ----------------- Proceso de Detección ----------------
+    if df_raw.shape[1] != df_modeled.shape[1]:
+        logger.warning(f"Dimensions from modeled and raw data: modeled={df_modeled.shape} / raw={df_raw.shape}")
+
+    # 1. Si la data cruda tiene mayor tamaño, 
+    try:
+        joined_df = df_raw.join(df_modeled, on=id_col, how='inner', suffix='_modeled')
+    except Exception as e:
+        logger.error(f"Failed join between raw and modeled. Error={e}")
 
     # Crea una expresión booleana que sea True si hay un cambio en CUALQUIER columna
     cambios_detectados_exp = pl.lit(False)
     for col in target_cols:
         cambios_detectados_exp = cambios_detectados_exp | (
-            pl.col(col).is_not_null() & pl.col(f'{col}_b').is_not_null() & (pl.col(col) != pl.col(f'{col}_b'))
+            pl.col(col).is_not_null() & pl.col(f'{col}_modeled').is_not_null() & (pl.col(col) != pl.col(f'{col}_modeled'))
         )
 
     # 3. Filtrar para obtener el DataFrame de logs
     logs_df = joined_df.filter(
-        (pl.col(f'{id_col}').is_not_null() & pl.col(f'{id_col}_b').is_not_null() & cambios_detectados_exp) |  # Registros modificados
-         pl.col(f'{id_col}').is_null() |  # Registros nuevos
-         pl.col(f'{id_col}_b').is_null()   # Registros eliminados
+        (pl.col(f'{id_col}').is_not_null() & cambios_detectados_exp) # Registros modificados
     ).with_columns(
         # Nueva columna 'id_log' con un UUID único para cada fila
         pl.lit(str(uuid.uuid4()), dtype=pl.String).alias('id_log'),
@@ -40,18 +76,21 @@ def authlog_table(df_a, df_b, log_root: str):
         )
 
     # Reordenar las columnas para mejor legibilidad
-    logs_df = logs_df.select([
+    cols_in_order = [
         'id_log',
         'fecha_modificacion',
         'tipo_cambio',
         'fuente_log',
         f'{id_col}', 
-        f'{id_col}_b',
-        f'{target_cols[0]}', 
-        f'{target_cols[0]}_b',
-        f'{target_cols[1]}', 
-        f'{target_cols[1]}_b'
-    ])
+        f'{id_col}_modeled'
+    ]
+
+    for t in target_cols:
+        cols_in_order.append(t)
+        cols_in_order.append(f"{t}_modeled")
+    
+    
+    logs_df = logs_df.select(cols_in_order)
     return logs_df
 
 # ----------------- Proceso de Actualización -----------------

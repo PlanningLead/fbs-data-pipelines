@@ -200,5 +200,10 @@ temp_data/
 
 # 2. Credentials
 mycreds.txt
+trash.txt
 google_credentials.json
 *.pickle
+
+# 3. Database files
+*.db
+*.duckdb
