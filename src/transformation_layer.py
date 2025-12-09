@@ -44,19 +44,23 @@ class FBSTransformer:
         df = df.with_columns(
             (
                 pl.col('TasaInterés')
-                .str.replace(r'\s*%', '') # Elimina el '%' y cualquier espacio antes de él
-                .cast(pl.Float64)         # Convierte el string a float
-                / 100                     # Divide por 100 para obtener el decimal
-            ).alias('TasaInterés') # Renombra la columna resultante al nombre original
+                .str.replace(r'\s*%', '')           # Elimina el '%' y cualquier espacio antes de él
+                .str.strip_chars()
+                .cast(pl.Float64, strict=False)     # Convierte el string a float
+                / 100*1000000                       # Divide por 100 para obtener el decimal
+            ).alias('TasaInterés')                  # Renombra la columna resultante al nombre original
         )
 
         # Step 3: Convert dates to correct date format for operations in polars
         logger.debug("Step 2 -- Converting date columns to datetime format for polars")
         date_columns = ['FechaIngreso', 'FechaSolicitud', 'Fecha Acta Aprobación', 'FechaGiro', 'FechaInicio', 'FechaLegalización', 'VencimientoCuota']
-
         df = df.with_columns(
-            pl.col(date_columns).
-            str.to_date(format="%d/%m/%y")
+            pl.col(date_columns)
+            .str.strip_chars()               # 1. Remove spaces
+            .str.split(" ").list.get(0)      # 2. Kill any time part (keep only "DD/MM/YYYY")
+            .str.replace_all("-", "/")       # 3. Turn dashes into slashes
+            .str.replace_all(r"\.", "/")     # 4. Turn dots into slashes
+            .str.to_date("%d/%m/%Y", strict=False) # 5. Try the standard conversion
         )
 
         # Step 4: Create 'tiempos' columns
