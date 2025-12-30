@@ -132,15 +132,15 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
     Returns:
         dict: La respuesta de la API de Sheets o None si hay un error.
     """
-    # Convertir el DataFrame a una lista de listas (incluyendo los encabezados)
-    # Esto es el formato que la API de Sheets espera Convertir a str para evitar problemas de tipos
-    data_to_write = dataframe.with_columns(pl.all().cast(pl.String)).rows()
-    # Añadir los encabezados del DataFrame
-    data_to_write.insert(0, dataframe.columns)
-
     # Definir el rango donde se escribirán los datos
     # Por ejemplo, si start_cell es 'A1' y sheet_name es 'Datos', el rango sería 'Datos!A1'
     range_name = f"{sheet_name}"
+
+    # Extract rows (Polars Nulls become Python None, which acts as valid JSON null)
+    data_to_write = dataframe.rows()
+
+    # We add the column names at the top
+    final_payload = [dataframe.columns] + data_to_write
 
     try:
         # 1. (Opcional) Borrar el contenido existente en el rango
@@ -155,18 +155,12 @@ def write_dataframe_to_sheet(service, dataframe, spreadsheet_id, sheet_name='She
             response = request.execute()
             logger.warning(f"Cleared range: {response.get('clearedRange')}")
 
-        # 2. Escribir los nuevos datos
-        body = {
-            'values': data_to_write
-        }
-        # valueInputOption: RAW significa que los valores se escriben tal cual.
-        # USER_ENTERED significa que Sheets intentará interpretar el valor (ej. '1/2' como fecha).
-        # Para DataFrames, RAW es generalmente lo que quieres.
+        # 4. Upload with USER_ENTERED
         result = service.spreadsheets().values().update(
             spreadsheetId=spreadsheet_id,
             range=range_name,
-            valueInputOption='RAW', # 'USER_ENTERED' o 'RAW'
-            body=body
+            valueInputOption='USER_ENTERED',
+            body={'values': final_payload}
         ).execute()
         
         logger.debug(f"{result.get('updatedCells')} updated cells in sheet '{sheet_name}'.")

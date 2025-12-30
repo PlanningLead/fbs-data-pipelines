@@ -47,7 +47,7 @@ class FBSTransformer:
                 .str.replace(r'\s*%', '')           # Elimina el '%' y cualquier espacio antes de él
                 .str.strip_chars()
                 .cast(pl.Float64, strict=False)     # Convierte el string a float
-                / 100*1000000                       # Divide por 100 para obtener el decimal
+                /(100*100000)                       # Divide por 100 para obtener el decimal
             ).alias('TasaInterés')                  # Renombra la columna resultante al nombre original
         )
 
@@ -56,11 +56,11 @@ class FBSTransformer:
         date_columns = ['FechaIngreso', 'FechaSolicitud', 'Fecha Acta Aprobación', 'FechaGiro', 'FechaInicio', 'FechaLegalización', 'VencimientoCuota']
         df = df.with_columns(
             pl.col(date_columns)
-            .str.strip_chars()               # 1. Remove spaces
-            .str.split(" ").list.get(0)      # 2. Kill any time part (keep only "DD/MM/YYYY")
-            .str.replace_all("-", "/")       # 3. Turn dashes into slashes
-            .str.replace_all(r"\.", "/")     # 4. Turn dots into slashes
-            .str.to_date("%d/%m/%Y", strict=False) # 5. Try the standard conversion
+            .str.strip_chars()                      # 1. Remove spaces
+            .str.split(" ").list.get(0)             # 2. Kill any time part (keep only "DD/MM/YYYY")
+            .str.replace_all("-", "/")              # 3. Turn dashes into slashes
+            .str.replace_all(r"\.", "/")            # 4. Turn dots into slashes
+            .str.to_date("%d/%m/%Y", strict=False)  # 5. Try the standard conversion
         )
 
         # Step 4: Create 'tiempos' columns
@@ -100,9 +100,22 @@ class FBSTransformer:
 
         logger.debug("Step 7 -- Changing date format to avoid issues when exporting to other file types.")
         date_columns += ['fecha_actual']
+        # df = df.with_columns(
+        #     pl.col(date_columns)
+        #     .dt.strftime("%d/%m/%Y")
+        # )
+
         df = df.with_columns(
-            pl.col(date_columns)
-            .dt.strftime("%d/%m/%Y")
+            # --- HANDLE DATES ---
+            # Convert Date/Datetime objects to ISO strings so JSON doesn't crash
+            pl.col(pl.Date).dt.strftime("%Y-%m-%d"),
+            pl.col(pl.Datetime).dt.strftime("%Y-%m-%d %H:%M:%S"),
+            
+            # --- HANDLE NULLS ---
+            # Google API prefers None (which becomes empty cell) or explicit empty string "".
+            # Polars .rows() handles Null -> None automatically, so we are usually good here.
+            # But if you have NaNs (Not a Number) in float columns, fill them:
+            pl.col(pl.Float64).fill_nan(None) 
         )
         
         return df
